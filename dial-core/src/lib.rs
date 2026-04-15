@@ -21,6 +21,8 @@ pub mod errors;
 pub mod event;
 /// Failure pattern detection and solution tracking.
 pub mod failure;
+/// Safe export and replay bridge for FeLoop-backed validation lanes.
+pub mod feloop_bridge;
 /// Git repository helpers (status, commit, revert, checkpoints).
 pub mod git;
 /// Project health score computation.
@@ -54,6 +56,10 @@ pub use engine::{
 };
 pub use errors::{DialError, Result};
 pub use event::{Event, EventHandler};
+pub use feloop_bridge::{
+    prepare_feloop_validation_lane, replay_feloop_validation_lane, FeloopCommandReport,
+    FeloopExecutionPreference, FeloopReplayReport, FeloopValidationLane, FeloopValidationOutput,
+};
 pub use health::{HealthScore, Trend};
 pub use metrics::{MetricsReport, TrendPoint};
 pub use provider::{Provider, ProviderRequest, ProviderResponse, TokenUsage};

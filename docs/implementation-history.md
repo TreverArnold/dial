@@ -6,6 +6,20 @@ Earlier release notes below still mention `@victorysightsound/dial-cli` where th
 
 ## Version Timeline
 
+### Unreleased - FeLoop Validation Bridge
+
+Work in progress focused on proving a safe FeLoop integration seam before changing the default DIAL
+execution path:
+
+- Adds `dial feloop prepare-validation` to export the current DIAL task and validation pipeline
+  into an isolated FeLoop workflow lane
+- Adds `dial feloop replay-validation` to run that lane through FeLoop with captured inspect,
+  validate, and replay logs plus a machine-readable `result.json`
+- Keeps the experimental path non-destructive by cloning `.dial/` state outside the live project
+  database and leaving the installed `dial validate` path untouched
+- Adds command-validation-step snapshots in FeLoop so shell-based validation lanes can round-trip
+  through workflow TOML instead of depending on runtime-only closures
+
 ### v4.2.8 (April 2026) - Writable Worker Enforcement
 
 Patch release focused on making DIAL verify writable worker access before task execution:

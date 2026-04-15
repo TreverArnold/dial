@@ -227,6 +227,12 @@ enum Commands {
         command: Option<PipelineCommands>,
     },
 
+    /// Export or replay a safe FeLoop-backed validation lane
+    Feloop {
+        #[command(subcommand)]
+        command: Option<FeloopCommands>,
+    },
+
     /// Show project health score
     Health {
         /// Output format (text, json)
@@ -550,6 +556,40 @@ enum PipelineCommands {
     },
     /// Remove a pipeline step
     Remove { id: i64 },
+}
+
+#[derive(Subcommand)]
+enum FeloopCommands {
+    /// Export the current DIAL task and validation pipeline into an isolated FeLoop lane
+    PrepareValidation {
+        /// Explicit task to map instead of using the current iteration or next pending task
+        #[arg(long)]
+        task: Option<i64>,
+        /// Destination directory for the isolated lane
+        #[arg(long)]
+        lane_root: Option<PathBuf>,
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Replay the isolated FeLoop validation lane through a FeLoop binary or manifest
+    ReplayValidation {
+        /// Explicit task to map instead of using the current iteration or next pending task
+        #[arg(long)]
+        task: Option<i64>,
+        /// Destination directory for the isolated lane
+        #[arg(long)]
+        lane_root: Option<PathBuf>,
+        /// Path to a ready-to-run feloop binary
+        #[arg(long)]
+        feloop_bin: Option<PathBuf>,
+        /// Path to a FeLoop Cargo.toml used via `cargo run --manifest-path ...`
+        #[arg(long)]
+        feloop_manifest: Option<PathBuf>,
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1216,6 +1256,38 @@ async fn run_command(command: Commands) -> anyhow::Result<()> {
             }
         },
 
+        Commands::Feloop { command } => match command {
+            Some(FeloopCommands::PrepareValidation {
+                task,
+                lane_root,
+                format,
+            }) => {
+                let lane = prepare_feloop_validation_lane(task, lane_root.as_deref())?;
+                print_feloop_lane(&lane, &format);
+            }
+            None => {
+                let lane = prepare_feloop_validation_lane(None, None)?;
+                print_feloop_lane(&lane, "text");
+            }
+            Some(FeloopCommands::ReplayValidation {
+                task,
+                lane_root,
+                feloop_bin,
+                feloop_manifest,
+                format,
+            }) => {
+                let report = replay_feloop_validation_lane(
+                    task,
+                    lane_root.as_deref(),
+                    &FeloopExecutionPreference {
+                        feloop_bin,
+                        feloop_manifest,
+                    },
+                )?;
+                print_feloop_replay_report(&report, &format);
+            }
+        },
+
         Commands::Health { format } => {
             let health = engine.health().await?;
             if format == "json" {
@@ -1727,6 +1799,65 @@ fn print_health(health: &dial_core::health::HealthScore) {
         );
         println!("    {}", output::dim(&factor.detail));
     }
+}
+
+fn print_feloop_lane(lane: &FeloopValidationLane, format: &str) {
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(lane).unwrap());
+        return;
+    }
+
+    println!("{}", output::bold("FeLoop Validation Lane"));
+    println!("{}", "=".repeat(60));
+    println!("Task:       #{} {}", lane.task_id, lane.task_description);
+    println!("Source:     {}", lane.task_source);
+    println!("Phase:      {}", lane.phase);
+    println!("Lane root:  {}", lane.lane_root.display());
+    println!("Workflow:   {}", lane.workflow_path.display());
+    println!("Isolated:   {}", lane.isolated_dial_dir.display());
+    println!("Protected:  {}", lane.protects_live_dial_state);
+    println!();
+    println!("{}", output::bold("Validation Steps"));
+    println!("{}", "-".repeat(60));
+    for step in &lane.validation_steps {
+        let required = if step.required {
+            "required"
+        } else {
+            "optional"
+        };
+        let timeout = step
+            .timeout_secs
+            .map(|seconds| format!(" ({seconds}s timeout)"))
+            .unwrap_or_default();
+        println!(
+            "  {} [{}]{}: {}",
+            step.name, required, timeout, step.command
+        );
+    }
+}
+
+fn print_feloop_replay_report(report: &FeloopReplayReport, format: &str) {
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(report).unwrap());
+        return;
+    }
+
+    print_feloop_lane(&report.lane, "text");
+    println!();
+    println!("{}", output::bold("Replay Commands"));
+    println!("{}", "-".repeat(60));
+    println!("Executor:   {}", report.executor);
+    print_feloop_command("inspect", &report.inspect);
+    print_feloop_command("validate", &report.validate);
+    print_feloop_command("replay", &report.replay);
+    println!("Result:     {}", report.result_path.display());
+}
+
+fn print_feloop_command(label: &str, report: &FeloopCommandReport) {
+    println!("  {}: {}", label, report.command.join(" "));
+    println!("    stdout: {}", report.stdout_path.display());
+    println!("    stderr: {}", report.stderr_path.display());
+    println!("    status: {}", report.status);
 }
 
 #[cfg(test)]

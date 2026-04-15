@@ -28,6 +28,7 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures = "0.3"
+toml = "0.8"
 
 # Internal crates
 dial-core = { path = "dial-core", version = "4.2.8" }

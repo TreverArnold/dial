@@ -362,6 +362,25 @@ dial validate
 - Resets the task to pending for retry
 - After 3 failures: blocks the task and reverts to last good commit
 
+### `dial feloop`
+
+Export or replay a safe FeLoop-backed validation lane without changing the default DIAL path.
+
+```bash
+dial feloop prepare-validation [--task ID] [--lane-root PATH] [--format text|json]
+dial feloop replay-validation [--task ID] [--lane-root PATH] [--feloop-bin PATH] [--feloop-manifest PATH] [--format text|json]
+```
+
+Behavior:
+- clones the current project `.dial/` state into an isolated lane
+- maps the current iteration task or next pending task into a FeLoop workflow
+- carries over configured validation pipeline steps, or falls back to `build_cmd` and `test_cmd`
+- keeps the live `.dial/` database untouched by default
+- runs `feloop inspect`, `feloop validate`, and `feloop replay` when using `replay-validation`
+
+Use `--feloop-bin` to point at a built `feloop` binary, or `--feloop-manifest` to run the sibling
+FeLoop source tree through Cargo.
+
 ### `dial run`
 
 Run the iterate/validate loop continuously.

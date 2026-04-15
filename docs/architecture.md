@@ -35,6 +35,7 @@ dial/
 │       │   ├── mod.rs      # Failure recording, solution auto-suggestion
 │       │   ├── patterns.rs # 21 regex patterns, DB-driven pattern matching
 │       │   └── solutions.rs # Trust scoring, confidence decay, history
+│       ├── feloop_bridge.rs # Safe FeLoop lane export and replay helpers
 │       ├── iteration/
 │       │   ├── mod.rs      # Core loop: iterate, validate, checkpoint
 │       │   ├── context.rs  # Context assembly, behavioral signs, prompts
@@ -202,6 +203,19 @@ All multi-step database operations are wrapped in explicit SQLite transactions:
 - `prd_import()` — multiple section inserts + source tracking
 
 The `with_transaction()` helper in `db.rs` handles BEGIN/COMMIT/ROLLBACK automatically.
+
+## FeLoop Validation Bridge
+
+The FeLoop bridge lives in `dial-core/src/feloop_bridge.rs` and provides a validation-oriented
+handoff rather than a full DIAL cutover:
+
+- `prepare_feloop_validation_lane(...)` clones the current `.dial/` state into an isolated lane,
+  maps the active DIAL task plus validation steps into a FeLoop workflow, and writes lane metadata
+- `replay_feloop_validation_lane(...)` resolves a FeLoop runtime, then runs `inspect`, `validate`,
+  and `replay` against that isolated workflow
+
+This design keeps the production DIAL path unchanged while still letting DIAL prove parity against
+FeLoop with real command-based validation steps.
 
 ## Error Handling
 

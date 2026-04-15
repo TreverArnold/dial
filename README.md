@@ -6,7 +6,7 @@ A Rust library and CLI for autonomous AI-assisted software development.
 Persistent memory. Failure pattern detection. Structured task execution.
 Build entire projects iteratively without losing context or repeating mistakes.
 
-[Quick Start](#quick-start)&ensp;&middot;&ensp;[Getting Started](docs/getting-started.md)&ensp;&middot;&ensp;[Project Wizard](#project-wizard)&ensp;&middot;&ensp;[Why Specs Matter](#why-specs-matter)&ensp;&middot;&ensp;[Templates](#templates)&ensp;&middot;&ensp;[Manual Workflow](#manual-workflow)&ensp;&middot;&ensp;[Library](#library-usage)&ensp;&middot;&ensp;[CLI Reference](docs/cli-reference.md)&ensp;&middot;&ensp;[AI Integration](docs/ai-integration.md)
+[Quick Start](#quick-start)&ensp;&middot;&ensp;[Getting Started](docs/getting-started.md)&ensp;&middot;&ensp;[Project Wizard](#project-wizard)&ensp;&middot;&ensp;[Why Specs Matter](#why-specs-matter)&ensp;&middot;&ensp;[Templates](#templates)&ensp;&middot;&ensp;[Manual Workflow](#manual-workflow)&ensp;&middot;&ensp;[Library](#library-usage)&ensp;&middot;&ensp;[CLI Reference](docs/cli-reference.md)&ensp;&middot;&ensp;[FeLoop Bridge](docs/feloop-bridge.md)&ensp;&middot;&ensp;[AI Integration](docs/ai-integration.md)
 
 ---
 
@@ -386,6 +386,18 @@ dial pipeline show
 ```
 
 Steps run in order. Required steps abort on failure. Optional steps log and continue.
+
+### FeLoop Validation Bridge
+
+```bash
+dial feloop prepare-validation
+dial feloop replay-validation --feloop-manifest ../fe-suite/fe-loop/Cargo.toml
+```
+
+This exports the current DIAL task plus validation steps into a FeLoop workflow inside an isolated
+lane. The live `.dial/` database stays untouched by default, and the normal `dial validate` path
+does not change. Use the bridge when you want parity or regression evidence before moving more of
+the loop over to FeLoop.
 
 ### Approval Gates
 ```bash
