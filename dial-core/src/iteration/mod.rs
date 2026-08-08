@@ -1,9 +1,12 @@
 pub mod context;
 pub mod orchestrator;
 pub mod signal;
-pub mod worker_access;
 pub mod validation;
+pub mod worker_access;
 
+use self::worker_access::{
+    probe_worker_write_access, record_worker_access_block, WorkerAccess, READ_ONLY_WORKER_REASON,
+};
 use crate::artifacts::{
     append_progress_log_entry, sync_operator_artifacts, sync_patterns_digest, ProgressLogEntry,
     ProgressOutcome,
@@ -12,7 +15,7 @@ use crate::db::{get_db, get_dial_dir, with_transaction};
 use crate::errors::{DialError, Result};
 use crate::failure::record_failure;
 use crate::git::{
-    checkpoint_create, checkpoint_drop, checkpoint_restore, checkpoints_enabled,
+    checkpoint_create, checkpoint_release, checkpoint_restore, checkpoints_enabled,
     clear_commit_candidates, git_commit_for_iteration, git_diff, git_diff_stat, git_has_changes,
     git_is_repo, git_revert_to, snapshot_commit_candidates,
 };
@@ -22,9 +25,6 @@ use crate::MAX_FIX_ATTEMPTS;
 use chrono::Local;
 use rusqlite::Connection;
 use std::fs;
-use self::worker_access::{
-    probe_worker_write_access, record_worker_access_block, WorkerAccess, READ_ONLY_WORKER_REASON,
-};
 
 pub use context::{
     gather_context, gather_context_budgeted, gather_context_items, gather_context_items_pure,
@@ -392,14 +392,19 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
             None
         };
 
-        // Drop checkpoint on success — the stash is no longer needed
+        // Restore any work that was present before this iteration. The task
+        // commit is complete, so the original changes can safely return.
         if git_is_repo() && checkpoints_enabled() {
-            match checkpoint_drop() {
-                Ok(true) => println!("{}", dim("Checkpoint dropped (validation passed)")),
-                Ok(false) => {} // no stash to drop
+            let checkpoint_id = iteration_id.to_string();
+            match checkpoint_release(&checkpoint_id) {
+                Ok(true) => println!("{}", dim("Pre-iteration work restored")),
+                Ok(false) => {}
                 Err(e) => println!(
                     "{}",
-                    yellow(&format!("Warning: checkpoint drop failed: {}", e))
+                    yellow(&format!(
+                        "Warning: pre-iteration work restore failed: {}",
+                        e
+                    ))
                 ),
             }
         }
@@ -484,7 +489,8 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
 
         // Restore checkpoint on failure (rolls back working tree to pre-task state)
         if git_is_repo() && checkpoints_enabled() {
-            match checkpoint_restore() {
+            let checkpoint_id = iteration_id.to_string();
+            match checkpoint_restore(&checkpoint_id) {
                 Ok(true) => println!("{}", yellow("Checkpoint restored (rolling back changes)")),
                 Ok(false) => {} // no checkpoint to restore
                 Err(e) => println!(

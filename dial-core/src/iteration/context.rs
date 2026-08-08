@@ -775,7 +775,7 @@ pub fn generate_subagent_prompt_with_mode(
     let signs_block = build_signs_block(mode.signs());
     let mode_specific_instructions = match mode {
         SubagentPromptMode::Manual => {
-r#"1. **Implement** the task completely (no placeholders)
+            r#"1. **Implement** the task completely (no placeholders)
 2. **Test** your implementation locally if possible
 3. **Stop immediately if the workspace is read-only**. Do not keep retrying or attempting edits in a read-only environment.
 4. **Signal completion** by writing a JSON file to `.dial/signal.json`:
@@ -802,7 +802,7 @@ Write the file as the **last step** before exiting. Include any learnings alongs
 Do NOT deviate from this task. Do NOT start other tasks."#
         }
         SubagentPromptMode::Autonomous => {
-r#"1. **Implement** the task completely (no placeholders)
+            r#"1. **Implement** the task completely (no placeholders)
 2. **Test** your implementation locally if possible using project-native commands when helpful
 3. **Stop immediately if the workspace is read-only**. Do not keep retrying or attempting edits in a read-only environment.
 4. **Do not run DIAL lifecycle commands** such as `dial validate`, `dial learn`, `session-context`, or any git staging/commit commands. The parent DIAL process will validate, capture learnings from your signal, and commit after you exit.

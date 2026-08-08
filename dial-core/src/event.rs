@@ -217,7 +217,7 @@ pub enum Event {
     },
     /// A checkpoint was restored after validation failure.
     CheckpointRestored { iteration_id: i64 },
-    /// A checkpoint was dropped after successful validation.
+    /// A checkpoint was released after successful validation.
     CheckpointDropped { iteration_id: i64 },
 
     // --- General Events ---

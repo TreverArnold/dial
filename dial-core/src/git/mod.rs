@@ -36,6 +36,9 @@ const TEST_SUFFIXES: &[&str] = &[
 ];
 const CLAUSE_SUFFIXES: &[&str] = &[" so ", " while "];
 const COMMIT_CANDIDATES_DIR: &str = "commit-candidates";
+const CHECKPOINT_PREFIX: &str = "dial-checkpoint-";
+const FAILED_CHECKPOINT_PREFIX: &str = "dial-failed-";
+const POST_VALIDATION_PREFIX: &str = "dial-post-validation-";
 
 /// Check if checkpoints are enabled via the `enable_checkpoints` config key.
 /// Defaults to true when the key is absent or not "false"/"0".
@@ -312,102 +315,154 @@ pub fn format_commit_message(message: &str) -> String {
     }
 }
 
-/// Create a checkpoint by stashing the current working tree (including untracked files).
-/// Returns `Ok(true)` if a stash was created, `Ok(false)` if the tree was clean (no-op).
+fn find_named_stash(prefix: &str, id: &str) -> Result<Option<String>> {
+    let marker = format!("{}{}", prefix, id);
+    let result = git_output_with_retry(&["stash", "list", "--format=%gd%x09%gs"])?;
+    if !result.status.success() {
+        return Err(DialError::GitError(format!(
+            "Failed to inspect checkpoints: {}",
+            output_error_message(&result)
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&result.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .find_map(|(reference, subject)| subject.contains(&marker).then(|| reference.to_string())))
+}
+
+fn stash_current_changes(message: &str) -> Result<bool> {
+    if !git_has_changes() {
+        return Ok(false);
+    }
+
+    let result = git_output_with_retry(&["stash", "push", "-u", "-m", message])?;
+    if result.status.success() {
+        Ok(true)
+    } else {
+        Err(DialError::GitError(format!(
+            "Failed to preserve working changes: {}",
+            output_error_message(&result)
+        )))
+    }
+}
+
+/// Save the pre-iteration working tree, including untracked files.
+/// Returns `Ok(true)` if a checkpoint was created or `Ok(false)` for a clean tree.
 pub fn checkpoint_create(id: &str) -> Result<bool> {
     if !git_is_repo() {
         return Err(DialError::NotGitRepo);
+    }
+
+    if find_named_stash(CHECKPOINT_PREFIX, id)?.is_some() {
+        return Err(DialError::GitError(format!(
+            "Checkpoint {} already exists",
+            id
+        )));
     }
 
     if !git_has_changes() {
         return Ok(false);
     }
 
-    let msg = format!("dial-checkpoint-{}", id);
-    let result = git_output_with_retry(&["stash", "push", "-u", "-m", &msg])?;
-
-    if result.status.success() {
-        Ok(true)
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr).to_string();
-        Err(DialError::GitError(format!(
-            "Failed to create checkpoint: {}",
-            stderr
-        )))
-    }
+    stash_current_changes(&format!("{}{}", CHECKPOINT_PREFIX, id))
 }
 
-/// Restore a checkpoint by popping the most recent stash, then resetting the index
-/// so all changes are unstaged (matching pre-checkpoint state).
-/// Returns `Ok(true)` on success, `Ok(false)` if there is no stash to pop.
-///
-/// If `git stash pop` fails (e.g. merge conflict from manual commits between
-/// iterate and validate), falls back to `git reset --hard HEAD` + `git stash drop`
-/// to guarantee a clean working tree.
-pub fn checkpoint_restore() -> Result<bool> {
+/// Preserve the current attempt and restore the matching pre-iteration state.
+/// A failed apply leaves both recovery stashes intact for manual resolution.
+pub fn checkpoint_restore(id: &str) -> Result<bool> {
     if !git_is_repo() {
         return Err(DialError::NotGitRepo);
     }
 
-    // Check if there are any stashes
-    let list_result = git_output_with_retry(&["stash", "list"])?;
+    let had_checkpoint = find_named_stash(CHECKPOINT_PREFIX, id)?.is_some();
+    let preserved_attempt = stash_current_changes(&format!("{}{}", FAILED_CHECKPOINT_PREFIX, id))?;
 
-    let stash_list = String::from_utf8_lossy(&list_result.stdout);
-    if stash_list.trim().is_empty() {
-        return Ok(false);
+    if !had_checkpoint {
+        return Ok(preserved_attempt);
     }
+    let checkpoint_ref = find_named_stash(CHECKPOINT_PREFIX, id)?.ok_or_else(|| {
+        DialError::GitError(format!("Checkpoint {} disappeared before restore", id))
+    })?;
 
-    // First, clean any current changes so the pop doesn't conflict
-    let _ = git_output_with_retry(&["checkout", "--", "."]);
-    let _ = git_output_with_retry(&["clean", "-fd"]);
-
-    let pop_result = git_output_with_retry(&["stash", "pop"])?;
+    let pop_result = git_output_with_retry(&["stash", "pop", "--index", &checkpoint_ref])?;
 
     if pop_result.status.success() {
         return Ok(true);
     }
 
-    // Stash pop failed (likely merge conflict). Recover by resetting to a clean
-    // state and dropping the stash. The pre-checkpoint state is lost, but the
-    // working tree is guaranteed clean for the next attempt.
-    eprintln!(
-        "Warning: checkpoint restore failed ({}), recovering with hard reset",
-        String::from_utf8_lossy(&pop_result.stderr).trim()
-    );
-
-    // Abort any in-progress merge from the failed pop
-    let _ = git_output_with_retry(&["reset", "--hard", "HEAD"]);
-    let _ = git_output_with_retry(&["clean", "-fd"]);
-
-    // The failed pop leaves the stash in place — drop it
-    let _ = git_output_with_retry(&["stash", "drop"]);
-
-    Ok(true)
+    Err(DialError::GitError(format!(
+        "Checkpoint {} could not be restored; the checkpoint and failed attempt were retained: {}",
+        id,
+        output_error_message(&pop_result)
+    )))
 }
 
-/// Drop the most recent stash entry (used after successful validation to discard the checkpoint).
-/// Returns `Ok(true)` if a stash was dropped, `Ok(false)` if there is no stash.
-pub fn checkpoint_drop() -> Result<bool> {
+/// Restore pre-iteration work after a successful task commit while keeping any
+/// uncommitted files that were intentionally excluded from that commit.
+pub fn checkpoint_release(id: &str) -> Result<bool> {
     if !git_is_repo() {
         return Err(DialError::NotGitRepo);
     }
 
-    let list_result = git_output_with_retry(&["stash", "list"])?;
-
-    let stash_list = String::from_utf8_lossy(&list_result.stdout);
-    if stash_list.trim().is_empty() {
+    if find_named_stash(CHECKPOINT_PREFIX, id)?.is_none() {
         return Ok(false);
     }
 
-    let drop_result = git_output_with_retry(&["stash", "drop"])?;
+    let post_validation_message = format!("{}{}", POST_VALIDATION_PREFIX, id);
+    let preserved_post_validation = stash_current_changes(&post_validation_message)?;
+    let checkpoint_ref = find_named_stash(CHECKPOINT_PREFIX, id)?.ok_or_else(|| {
+        DialError::GitError(format!("Checkpoint {} disappeared before release", id))
+    })?;
+    let restore_checkpoint = git_output_with_retry(&["stash", "pop", "--index", &checkpoint_ref])?;
+    if !restore_checkpoint.status.success() {
+        return Err(DialError::GitError(format!(
+            "Checkpoint {} could not be released; recovery stashes were retained: {}",
+            id,
+            output_error_message(&restore_checkpoint)
+        )));
+    }
+
+    if preserved_post_validation {
+        let post_validation_ref =
+            find_named_stash(POST_VALIDATION_PREFIX, id)?.ok_or_else(|| {
+                DialError::GitError(format!(
+                    "Post-validation changes for checkpoint {} disappeared before restore",
+                    id
+                ))
+            })?;
+        let restore_post_validation =
+            git_output_with_retry(&["stash", "pop", "--index", &post_validation_ref])?;
+        if !restore_post_validation.status.success() {
+            return Err(DialError::GitError(format!(
+                "Post-validation changes for checkpoint {} could not be restored; the recovery stash was retained: {}",
+                id,
+                output_error_message(&restore_post_validation)
+            )));
+        }
+    }
+
+    Ok(true)
+}
+
+/// Drop one named checkpoint without touching unrelated Git stashes.
+pub fn checkpoint_drop(id: &str) -> Result<bool> {
+    if !git_is_repo() {
+        return Err(DialError::NotGitRepo);
+    }
+
+    let Some(checkpoint_ref) = find_named_stash(CHECKPOINT_PREFIX, id)? else {
+        return Ok(false);
+    };
+
+    let drop_result = git_output_with_retry(&["stash", "drop", &checkpoint_ref])?;
 
     if drop_result.status.success() {
         Ok(true)
     } else {
-        let stderr = String::from_utf8_lossy(&drop_result.stderr).to_string();
         Err(DialError::GitError(format!(
             "Failed to drop checkpoint: {}",
-            stderr
+            output_error_message(&drop_result)
         )))
     }
 }

@@ -620,7 +620,7 @@ impl EventHandler for CliEventHandler {
                 println!(
                     "{}",
                     output::dim(&format!(
-                        "Checkpoint dropped (iteration #{} passed)",
+                        "Checkpoint released (iteration #{} passed)",
                         iteration_id
                     ))
                 );

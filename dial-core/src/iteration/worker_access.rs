@@ -122,7 +122,12 @@ fn unique_probe_suffix() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    format!("{}-{}-{}", process::id(), Local::now().timestamp_millis(), nanos)
+    format!(
+        "{}-{}-{}",
+        process::id(),
+        Local::now().timestamp_millis(),
+        nanos
+    )
 }
 
 #[cfg(test)]
@@ -238,10 +243,7 @@ mod tests {
         assert_eq!(row.1, "Codex CLI");
         assert_eq!(row.2, "probe_read_only");
         assert_eq!(row.3, READ_ONLY_WORKER_REASON);
-        assert_eq!(
-            row.4.as_deref(),
-            Some("probe failed: permission denied")
-        );
+        assert_eq!(row.4.as_deref(), Some("probe failed: permission denied"));
         assert_eq!(row.5, 0);
     }
 }

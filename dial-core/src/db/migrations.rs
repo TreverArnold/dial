@@ -1,4 +1,4 @@
-use crate::errors::Result;
+use crate::errors::{DialError, Result};
 use rusqlite::Connection;
 
 /// Each migration has a version number and an apply function.
@@ -92,25 +92,83 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    let current_version: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM migrations",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
     for migration in MIGRATIONS {
-        if migration.version > current_version {
+        let already_applied: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM migrations WHERE version = ?1)",
+            [migration.version],
+            |row| row.get(0),
+        )?;
+        if !already_applied {
+            apply_migration(conn, migration)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_migration(conn: &Connection, migration: &Migration) -> Result<()> {
+    let foreign_keys_enabled: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    let rebuilds_referenced_table = migration.version == 8;
+
+    // SQLite checks DROP TABLE against child rows immediately. Migration 8
+    // replaces iterations in place, so enforcement must be paused before the
+    // transaction and the completed schema must be checked before commit.
+    if rebuilds_referenced_table && foreign_keys_enabled {
+        conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    }
+
+    let result = (|| -> Result<()> {
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+
+        let transaction_result = (|| -> Result<()> {
+            let already_applied: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM migrations WHERE version = ?1)",
+                [migration.version],
+                |row| row.get(0),
+            )?;
+            if already_applied {
+                return Ok(());
+            }
+
             (migration.apply)(conn)?;
             conn.execute(
                 "INSERT INTO migrations (version, description) VALUES (?1, ?2)",
                 rusqlite::params![migration.version, migration.description],
             )?;
+
+            if rebuilds_referenced_table {
+                let mut statement = conn.prepare("PRAGMA foreign_key_check")?;
+                if statement.query([])?.next()?.is_some() {
+                    return Err(DialError::UserError(format!(
+                        "Migration {} would leave invalid foreign-key references",
+                        migration.version
+                    )));
+                }
+            }
+
+            Ok(())
+        })();
+
+        match transaction_result {
+            Ok(()) => match conn.execute_batch("COMMIT;") {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(error.into())
+                }
+            },
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                Err(error)
+            }
         }
+    })();
+
+    if rebuilds_referenced_table && foreign_keys_enabled {
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     }
 
-    Ok(())
+    result
 }
 
 /// Return the current schema version.
@@ -378,7 +436,8 @@ fn migrate_008_iterations_approval_status(conn: &Connection) -> Result<()> {
     // Recreate the iterations table with the expanded CHECK constraint.
     conn.execute_batch(
         r#"
-        CREATE TABLE IF NOT EXISTS iterations_new (
+        DROP TABLE IF EXISTS iterations_new;
+        CREATE TABLE iterations_new (
             id INTEGER PRIMARY KEY,
             task_id INTEGER NOT NULL,
             status TEXT DEFAULT 'in_progress'
@@ -391,7 +450,7 @@ fn migrate_008_iterations_approval_status(conn: &Connection) -> Result<()> {
             notes TEXT,
             FOREIGN KEY (task_id) REFERENCES tasks(id)
         );
-        INSERT OR IGNORE INTO iterations_new SELECT * FROM iterations;
+        INSERT INTO iterations_new SELECT * FROM iterations;
         DROP TABLE iterations;
         ALTER TABLE iterations_new RENAME TO iterations;
         "#,
@@ -492,6 +551,84 @@ mod tests {
 
         let version = current_version(&conn).unwrap();
         assert_eq!(version, latest_version());
+    }
+
+    #[test]
+    fn test_iteration_rebuild_preserves_references_and_recovers_partial_attempt() {
+        let conn = setup_test_db();
+
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys=OFF;
+            DROP TABLE iterations;
+            CREATE TABLE iterations (
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'in_progress'
+                    CHECK(status IN ('in_progress', 'completed', 'failed', 'reverted')),
+                attempt_number INTEGER DEFAULT 1,
+                started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                ended_at TEXT,
+                duration_seconds REAL,
+                commit_hash TEXT,
+                notes TEXT,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
+            );
+            PRAGMA foreign_keys=ON;
+
+            INSERT INTO tasks (id, description) VALUES (1, 'Legacy task');
+            INSERT INTO iterations (id, task_id) VALUES (1, 1);
+            INSERT INTO actions (id, iteration_id, action_type, description)
+                VALUES (1, 1, 'edit', 'Legacy action');
+            INSERT INTO failures (id, iteration_id, error_text)
+                VALUES (1, 1, 'Legacy failure');
+
+            CREATE TABLE iterations_new AS SELECT * FROM iterations;
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(current_version(&conn).unwrap(), latest_version());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM iterations", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM failures", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM actions", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(!conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'iterations_new')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap());
+        assert_eq!(
+            conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        let mut violations = conn.prepare("PRAGMA foreign_key_check").unwrap();
+        assert!(violations.query([]).unwrap().next().unwrap().is_none());
+        conn.execute(
+            "UPDATE iterations SET status = 'awaiting_approval' WHERE id = 1",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

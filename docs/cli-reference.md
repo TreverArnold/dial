@@ -348,15 +348,16 @@ dial validate
 ```
 
 **When local validation passes:**
-- Drops checkpoint (restores clean git state marker)
 - If the task requires browser verification and no verification is recorded for the current iteration, pauses instead of completing
 - Otherwise auto-commits all changes
+- Restores work that existed before the iteration from its named checkpoint
 - Otherwise marks the iteration and task as completed
 - Otherwise auto-unblocks dependent tasks
 - If a solution was suggested, increments its confidence
 
 **On failure:**
-- Restores checkpoint (reverts working tree to pre-iteration state)
+- Preserves the failed attempt in a recovery stash
+- Restores the matching checkpoint to return to the pre-iteration state
 - Detects failure pattern
 - Records failure and checks for trusted solutions
 - Resets the task to pending for retry

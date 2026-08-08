@@ -58,7 +58,7 @@ Configuration is stored in the SQLite database as key-value pairs. Manage with `
 | `subagent_timeout` | `1800` | Per-task timeout for auto-run in seconds |
 | `approval_mode` | `auto` | Approval gate: `auto`, `review`, or `manual` |
 | `iteration_mode` | `autonomous` | Auto-run behavior: `autonomous`, `review_every:N`, or `review_each` |
-| `enable_checkpoints` | `true` | Create git stash checkpoints before each iteration |
+| `enable_checkpoints` | `true` | Preserve pre-iteration work with named git stash checkpoints |
 | `max_total_failures` | `10` | Auto-block tasks exceeding this many cumulative failures |
 
 ### Setting Configuration

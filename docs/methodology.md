@@ -160,7 +160,7 @@ After 3 failures:
 2. If in a git repo, DIAL reverts to the last successful commit
 3. The task stays in the queue as blocked for human review
 
-Checkpoint restore handles edge cases gracefully: if `git stash pop` fails (e.g. the user made manual commits between `dial iterate` and `dial validate`), DIAL recovers with a hard reset and stash drop to guarantee a clean working tree for the next attempt.
+Checkpoint restore favors recovery over forced cleanup. DIAL names checkpoints by iteration, preserves failed changes in a separate recovery stash, and leaves both stashes intact if a restore conflicts with manual commits. It does not hard-reset the repository or discard the only recovery copy.
 
 This ensures the codebase never degrades past the last known-good state.
 

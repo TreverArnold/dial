@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use tempfile::TempDir;
 
 use dial_core::git::{
-    checkpoint_create, checkpoint_drop, checkpoint_restore, checkpoints_enabled, git_has_changes,
-    git_is_repo,
+    checkpoint_create, checkpoint_drop, checkpoint_release, checkpoint_restore,
+    checkpoints_enabled, git_has_changes, git_is_repo,
 };
 use dial_core::Engine;
 
@@ -126,7 +126,7 @@ fn test_checkpoint_restore_pops_stash() {
     assert!(!git_has_changes());
 
     // Restore the checkpoint
-    let result = checkpoint_restore();
+    let result = checkpoint_restore("test-restore");
     assert!(result.is_ok());
     assert!(result.unwrap(), "Should return true when stash is popped");
 
@@ -147,7 +147,7 @@ fn test_checkpoint_restore_noop_no_stash() {
     let (_tmp, original_dir) = setup_git_repo();
 
     // No stash exists
-    let result = checkpoint_restore();
+    let result = checkpoint_restore("missing");
     assert!(result.is_ok());
     assert!(!result.unwrap(), "Should return false when no stash exists");
 
@@ -168,13 +168,19 @@ fn test_checkpoint_restore_cleans_current_changes_first() {
     fs::write(tmp.path().join("extra.txt"), "extra file\n").unwrap();
 
     // Restore should clean current changes and pop stash
-    let result = checkpoint_restore();
+    let result = checkpoint_restore("test-overwrite");
     assert!(result.is_ok());
     assert!(result.unwrap());
 
     // Should have the original content
     let content = fs::read_to_string(tmp.path().join("code.rs")).unwrap();
     assert_eq!(content, "original\n");
+
+    let stash_list = Command::new("git")
+        .args(["stash", "list"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&stash_list.stdout).contains("dial-failed-test-overwrite"));
 
     env::set_current_dir(original_dir).unwrap();
 }
@@ -191,7 +197,7 @@ fn test_checkpoint_drop_removes_stash() {
     checkpoint_create("test-drop").unwrap();
 
     // Drop the stash
-    let result = checkpoint_drop();
+    let result = checkpoint_drop("test-drop");
     assert!(result.is_ok());
     assert!(result.unwrap(), "Should return true when stash is dropped");
 
@@ -214,9 +220,66 @@ fn test_checkpoint_drop_noop_no_stash() {
     let _lock = CWD_LOCK.lock().unwrap();
     let (_tmp, original_dir) = setup_git_repo();
 
-    let result = checkpoint_drop();
+    let result = checkpoint_drop("missing");
     assert!(result.is_ok());
     assert!(!result.unwrap(), "Should return false when no stash exists");
+
+    env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+fn test_checkpoint_drop_leaves_unrelated_stashes_untouched() {
+    let _lock = CWD_LOCK.lock().unwrap();
+    let (tmp, original_dir) = setup_git_repo();
+
+    fs::write(tmp.path().join("user-work.txt"), "keep this stash\n").unwrap();
+    Command::new("git")
+        .args(["stash", "push", "-u", "-m", "user-stash"])
+        .output()
+        .unwrap();
+
+    fs::write(tmp.path().join("task-work.txt"), "checkpoint work\n").unwrap();
+    checkpoint_create("named-drop").unwrap();
+    assert!(checkpoint_drop("named-drop").unwrap());
+
+    let stash_list = Command::new("git")
+        .args(["stash", "list"])
+        .output()
+        .unwrap();
+    let stash_text = String::from_utf8_lossy(&stash_list.stdout);
+    assert!(stash_text.contains("user-stash"));
+    assert!(!stash_text.contains("dial-checkpoint-named-drop"));
+
+    env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+fn test_checkpoint_release_restores_baseline_and_uncommitted_scratch() {
+    let _lock = CWD_LOCK.lock().unwrap();
+    let (tmp, original_dir) = setup_git_repo();
+
+    fs::write(tmp.path().join("baseline.txt"), "pre-iteration work\n").unwrap();
+    assert!(checkpoint_create("release-both").unwrap());
+
+    fs::write(tmp.path().join("scratch.txt"), "post-validation notes\n").unwrap();
+    assert!(checkpoint_release("release-both").unwrap());
+
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("baseline.txt")).unwrap(),
+        "pre-iteration work\n"
+    );
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("scratch.txt")).unwrap(),
+        "post-validation notes\n"
+    );
+
+    let stash_list = Command::new("git")
+        .args(["stash", "list"])
+        .output()
+        .unwrap();
+    let stash_text = String::from_utf8_lossy(&stash_list.stdout);
+    assert!(!stash_text.contains("dial-checkpoint-release-both"));
+    assert!(!stash_text.contains("dial-post-validation-release-both"));
 
     env::set_current_dir(original_dir).unwrap();
 }
@@ -271,7 +334,7 @@ fn test_checkpoint_full_cycle_create_restore() {
     assert!(git_has_changes());
 
     // Restore checkpoint (rolls back bad changes, restores original agent work)
-    assert!(checkpoint_restore().unwrap());
+    assert!(checkpoint_restore("cycle-1").unwrap());
 
     // Verify the original agent work is back
     let main_content = fs::read_to_string(tmp.path().join("main.rs")).unwrap();
@@ -295,7 +358,7 @@ fn test_checkpoint_full_cycle_create_drop() {
     assert!(checkpoint_create("cycle-success").unwrap());
 
     // Agent succeeds, validation passes — drop the checkpoint
-    assert!(checkpoint_drop().unwrap());
+    assert!(checkpoint_drop("cycle-success").unwrap());
 
     // Stash should be empty now
     let stash_list = Command::new("git")
@@ -333,7 +396,7 @@ fn test_checkpoint_restore_errors_outside_repo() {
     env::set_current_dir(tmp.path()).unwrap();
 
     assert!(!git_is_repo());
-    let result = checkpoint_restore();
+    let result = checkpoint_restore("no-repo");
     assert!(result.is_err());
 
     env::set_current_dir(original_dir).unwrap();
@@ -347,7 +410,7 @@ fn test_checkpoint_drop_errors_outside_repo() {
     env::set_current_dir(tmp.path()).unwrap();
 
     assert!(!git_is_repo());
-    let result = checkpoint_drop();
+    let result = checkpoint_drop("no-repo");
     assert!(result.is_err());
 
     env::set_current_dir(original_dir).unwrap();
@@ -418,7 +481,7 @@ async fn test_integration_iterate_fail_restore_retry_cycle() {
     fs::write(tmp.path().join("garbage.txt"), "junk file\n").unwrap();
 
     // --- Validation fails → restore checkpoint ---
-    let restored = checkpoint_restore().unwrap();
+    let restored = checkpoint_restore(&format!("{}-attempt1", task_id)).unwrap();
     assert!(restored, "Checkpoint should be restored");
 
     // Verify: the pre-checkpoint state (attempt 1's work) is restored
@@ -455,7 +518,7 @@ async fn test_integration_iterate_fail_restore_retry_cycle() {
     // First, pop the stash to get the code back (simulating what happens between checkpoint and commit)
     // In real flow, the code is already in working tree when validate runs.
     // But since we stashed it, let's restore it.
-    let restored = checkpoint_restore().unwrap();
+    let restored = checkpoint_restore(&format!("{}-attempt2", task_id)).unwrap();
     assert!(restored);
 
     // Now commit (simulating successful validation path)
@@ -466,7 +529,7 @@ async fn test_integration_iterate_fail_restore_retry_cycle() {
         .unwrap();
 
     // Drop any remaining checkpoint
-    let dropped = checkpoint_drop().unwrap();
+    let dropped = checkpoint_drop(&format!("{}-attempt2", task_id)).unwrap();
     assert!(!dropped, "No stash should remain after pop + commit");
 
     // Verify final state

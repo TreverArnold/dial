@@ -475,7 +475,7 @@ dial patterns metrics --sort cost      # Sort by cost, time, or occurrences
 
 ### Checkpoint System
 
-Automatic git stash-based checkpoints before task execution. On validation failure, the working tree is restored to pre-task state before retry. Controlled via `enable_checkpoints` config (default: true).
+Automatic, named git stash checkpoints preserve work that existed before task execution. On validation failure, DIAL saves the failed attempt in a separate recovery stash before restoring the pre-task state. After a successful task commit, the pre-task work is restored. Unrelated stashes are never selected or dropped. Controlled via `enable_checkpoints` config (default: true).
 
 ### Structured Subagent Signals
 

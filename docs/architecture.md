@@ -108,11 +108,11 @@ dial iterate
     ├── Open .dial/<current_phase>.db
     ├── SELECT next pending task (respects dependency graph)
     ├── Check attempt count (max 3) and chronic failure count
-    ├── Create checkpoint (git stash) if enabled
     ├── BEGIN TRANSACTION
     │   ├── INSERT INTO iterations (task_id, attempt_number, started_at)
     │   ├── UPDATE tasks SET status = 'in_progress', total_attempts += 1
     │   └── COMMIT
+    ├── Create named checkpoint (git stash) if enabled and the tree is dirty
     ├── gather_context():
     │   ├── Include behavioral signs
     │   ├── SELECT linked spec/PRD section
@@ -143,8 +143,8 @@ dial validate
     │   └── Return ValidationResult
     │
     ├── If all required steps pass:
-    │   ├── Drop checkpoint (git stash drop)
     │   ├── git add -A && git commit
+    │   ├── Restore pre-iteration work from the named checkpoint
     │   ├── UPDATE iterations SET status = 'completed'
     │   ├── UPDATE tasks SET status = 'completed'
     │   ├── Auto-unblock dependent tasks
@@ -152,7 +152,8 @@ dial validate
     │   └── Record metrics
     │
     └── If any required step fails:
-        ├── Restore checkpoint (git stash pop + checkout)
+        ├── Save failed changes in a recovery stash
+        ├── Restore the matching pre-iteration checkpoint
         ├── detect_failure_pattern(error_text)
         ├── BEGIN TRANSACTION
         │   ├── INSERT/UPDATE failure_patterns

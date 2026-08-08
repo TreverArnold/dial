@@ -23,11 +23,11 @@ use std::process::{Command, Stdio};
 
 use super::context::generate_autonomous_subagent_prompt;
 use super::signal::{read_signal_file, signal_file_to_result};
+use super::validation::run_validation;
 use super::worker_access::{
     probe_worker_write_access, record_worker_access_block, WorkerAccess, WorkerAccessHint,
     READ_ONLY_WORKER_REASON,
 };
-use super::validation::run_validation;
 use super::{complete_iteration, create_iteration};
 
 /// Supported AI CLI tools for orchestration
@@ -519,13 +519,7 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
                         if !detail.trim().is_empty() {
                             println!("{}", dim(&format!("Probe detail: {}", detail.trim())));
                         }
-                        record_worker_access_block(
-                            &conn,
-                            &task,
-                            ai_cli.name(),
-                            false,
-                            &detail,
-                        )?;
+                        record_worker_access_block(&conn, &task, ai_cli.name(), false, &detail)?;
                         break;
                     }
                 }
