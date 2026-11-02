@@ -1,4 +1,5 @@
 pub mod context;
+mod opencode_live;
 pub mod orchestrator;
 pub mod signal;
 mod storybook;

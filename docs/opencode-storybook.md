@@ -68,3 +68,14 @@ The separate `--browser-check` task flag still requires manual browser-verificat
 it does not launch Playwright or inspect screenshots. Validation command timeouts in the upstream
 runner are not enforced, so use test-runner or external timeouts. The worker's upstream streaming
 timeout also depends on output arriving; use an external process deadline for bounded unattended runs.
+
+## Live OpenCode viewer (Linux/Konsole)
+
+Set `dial config set opencode_live true` to open a Konsole window for each OpenCode worker attempt.
+DIAL starts a loopback OpenCode server on port 4097, creates a fresh session, opens Konsole
+attached to that exact session, then sends the task through `opencode run --attach --session`.
+The viewer and worker therefore display the same conversation and tool activity. DIAL still owns
+validation and commits; do not send a second prompt from the viewer while the worker is running.
+The server stops after the attempt. If port 4097 is occupied, set `opencode_live_port` to a free
+port. This mode requires Linux, Konsole, and `curl` on PATH; other environments keep the original
+headless runner. Disable it with `dial config set opencode_live false`.

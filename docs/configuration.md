@@ -53,6 +53,8 @@ Configuration is stored in the SQLite database as key-value pairs. Manage with `
 | `test_timeout` | `600` | Test command timeout in seconds |
 | `ai_cli` | `claude` | AI CLI for auto-run: `claude`, `codex`, `copilot`, `gemini`, or `opencode` |
 | `opencode_model` | (empty) | OpenCode provider/model ID; empty uses OpenCode's default |
+| `opencode_live` | `false` | Open a Konsole viewer attached to the exact worker session (Linux) |
+| `opencode_live_port` | `4097` | Loopback OpenCode server port for live viewer mode |
 | `opencode_agent` | (empty) | OpenCode agent name; empty uses OpenCode's default |
 | `storybook_dir` | (empty) | Opt-in project-local source/configuration directory |
 | `storybook_index` | (empty) | Optional local Storybook index.json for bounded discovery context |

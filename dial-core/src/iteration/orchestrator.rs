@@ -243,9 +243,17 @@ impl SubagentResult {
 }
 
 // Pass provider/model and prompt paths as arguments, never shell source.
-fn opencode_command(prompt_file: &str, model: Option<&str>, agent: Option<&str>) -> Command {
+fn opencode_command(
+    prompt_file: &str,
+    model: Option<&str>,
+    agent: Option<&str>,
+    live: Option<(&str, &str)>,
+) -> Command {
     let mut command = Command::new("opencode");
     command.arg("run");
+    if let Some((url, id)) = live {
+        command.args(["--attach", url, "--session", id]);
+    }
     if let Some(model) = model.filter(|v| !v.trim().is_empty()) {
         command.args(["--model", model]);
     }
@@ -271,12 +279,26 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
     let shell_cmd = ai_cli.build_command(prompt_file);
     println!("{}", dim(&format!("Command: {}", shell_cmd)));
 
+    let live =
+        if ai_cli == AiCli::OpenCode && config_get("opencode_live")?.as_deref() == Some("true") {
+            let port = config_get("opencode_live_port")?
+                .unwrap_or_else(|| "4097".into())
+                .parse::<u16>()
+                .map_err(|_| {
+                    DialError::InvalidConfig("opencode_live_port must be a valid port".into())
+                })?;
+            Some(super::opencode_live::start(port, "DIAL worker")?)
+        } else {
+            None
+        };
     let (shell_program, shell_args) = shell_program_and_args(ai_cli);
     let mut command = if ai_cli == AiCli::OpenCode {
         opencode_command(
             prompt_file,
             config_get("opencode_model")?.as_deref(),
             config_get("opencode_agent")?.as_deref(),
+            live.as_ref()
+                .map(|session| (session.url.as_str(), session.id.as_str())),
         )
     } else {
         let mut command = Command::new(shell_program);
@@ -1436,6 +1458,7 @@ mod opencode_tests {
             "a path/$(touch nope).md",
             Some("provider/model:free"),
             Some("build"),
+            None,
         );
         let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
         assert_eq!(AiCli::from_str("opencode"), Some(AiCli::OpenCode));
@@ -1453,5 +1476,15 @@ mod opencode_tests {
         );
         assert!(!args.contains(&"--continue"));
         assert!(!args.contains(&"--auto"));
+        let live = opencode_command(
+            "prompt.md",
+            Some("provider/model:free"),
+            Some("build"),
+            Some(("http://127.0.0.1:4097", "ses_test")),
+        );
+        let live_args: Vec<_> = live.get_args().map(|s| s.to_str().unwrap()).collect();
+        assert!(live_args
+            .windows(4)
+            .any(|w| w == ["--attach", "http://127.0.0.1:4097", "--session", "ses_test"]));
     }
 }
