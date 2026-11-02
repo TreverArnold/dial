@@ -59,6 +59,10 @@ The core library (`dial-core`) is embeddable — you can build custom tools, das
                              Retry (max 3)
 ```
 
+## Fork integrations
+
+See [OpenCode execution and project-local Storybook reuse](docs/opencode-storybook.md) for DeepSeek configuration, component discovery, and required UI checks.
+
 ## Quick Start
 
 ### Install

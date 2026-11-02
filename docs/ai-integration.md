@@ -56,6 +56,12 @@ DIAL_LEARNING: <category>: <what was learned>
 
 The parser handles formatting variations (markdown bold, backticks, spaces vs underscores, case differences) and filters out template placeholders and instruction lines.
 
+## OpenCode and DeepSeek
+
+Auto-run supports `--cli opencode` using the provider/model configured in OpenCode.
+See [OpenCode and Storybook setup](opencode-storybook.md) for configuration and validation.
+This does not add an OpenCode planning-wizard backend.
+
 ## Claude Code
 
 ### Setup

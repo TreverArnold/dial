@@ -603,7 +603,7 @@ Manage the configurable validation pipeline.
 
 ```bash
 dial pipeline show                                                    # List all steps
-dial pipeline add NAME CMD --sort N --required|--optional [--timeout S]  # Add step
+dial pipeline add NAME CMD --order N [--optional] [--timeout S]  # Add step
 dial pipeline remove ID                                               # Remove step
 ```
 

@@ -772,6 +772,7 @@ pub fn generate_subagent_prompt_with_mode(
     mode: SubagentPromptMode,
 ) -> Result<String> {
     let context = gather_context_without_signs(conn, task)?;
+    let storybook = super::storybook::context(conn, &std::env::current_dir()?, &task.description)?;
     let signs_block = build_signs_block(mode.signs());
     let mode_specific_instructions = match mode {
         SubagentPromptMode::Manual => {
@@ -842,6 +843,8 @@ You are a fresh AI agent spawned by DIAL to complete ONE task with clean context
 {signs_block}
 
 {context}
+
+{storybook}
 
 ## Instructions
 

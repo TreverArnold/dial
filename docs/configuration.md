@@ -51,7 +51,11 @@ Configuration is stored in the SQLite database as key-value pairs. Manage with `
 | `test_cmd` | (empty) | Shell command to run tests |
 | `build_timeout` | `600` | Build command timeout in seconds |
 | `test_timeout` | `600` | Test command timeout in seconds |
-| `ai_cli` | `claude` | AI CLI for auto-run: `claude`, `codex`, `copilot`, or `gemini` |
+| `ai_cli` | `claude` | AI CLI for auto-run: `claude`, `codex`, `copilot`, `gemini`, or `opencode` |
+| `opencode_model` | (empty) | OpenCode provider/model ID; empty uses OpenCode's default |
+| `opencode_agent` | (empty) | OpenCode agent name; empty uses OpenCode's default |
+| `storybook_dir` | (empty) | Opt-in project-local source/configuration directory |
+| `storybook_index` | (empty) | Optional local Storybook index.json for bounded discovery context |
 | `wizard_backend` | auto-resolved | Wizard backend for `dial new` / `dial spec wizard`: `codex`, `claude`, `copilot`, `gemini`, or `openai-compatible` |
 | `wizard_model` | (empty) | Optional model override for the selected wizard backend |
 | `wizard_api_base_url` | (empty) | Base URL for the `openai-compatible` wizard backend |

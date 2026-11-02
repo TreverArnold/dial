@@ -301,7 +301,7 @@ enum Commands {
         #[arg(long)]
         max: Option<u32>,
 
-        /// AI CLI to use (claude, codex, copilot, gemini)
+        /// AI CLI to use (claude, codex, copilot, gemini, opencode)
         #[arg(long, default_value = "claude")]
         cli: String,
 

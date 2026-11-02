@@ -37,6 +37,7 @@ pub enum AiCli {
     Codex,
     Copilot,
     Gemini,
+    OpenCode,
 }
 
 impl AiCli {
@@ -46,6 +47,7 @@ impl AiCli {
             "codex" => Some(AiCli::Codex),
             "copilot" => Some(AiCli::Copilot),
             "gemini" => Some(AiCli::Gemini),
+            "opencode" => Some(AiCli::OpenCode),
             _ => None,
         }
     }
@@ -54,6 +56,7 @@ impl AiCli {
         if windows {
             let prompt_file_ps = prompt_file.replace('\'', "''");
             match self {
+                AiCli::OpenCode => format!("opencode run --file '{}' -- 'Execute the attached DIAL task.'", prompt_file_ps),
                 AiCli::ClaudeCode => format!(
                     "claude -p (Get-Content -Raw '{}') 2>&1",
                     prompt_file_ps
@@ -73,6 +76,7 @@ impl AiCli {
             }
         } else {
             match self {
+                AiCli::OpenCode => format!("opencode run --file '{}' -- 'Execute the attached DIAL task.'", prompt_file.replace('\'', "'\"'\"'")),
                 // claude -p "prompt" (reads prompt, outputs response, exits)
                 AiCli::ClaudeCode => format!("claude -p \"$(cat {})\" 2>&1", prompt_file),
                 // codex exec "prompt" (non-interactive mode, skip git check for temp dirs)
@@ -102,13 +106,16 @@ impl AiCli {
             AiCli::Codex => "Codex CLI",
             AiCli::Copilot => "GitHub Copilot CLI",
             AiCli::Gemini => "Gemini CLI",
+            AiCli::OpenCode => "OpenCode",
         }
     }
 
     pub fn worker_access_hint(&self) -> WorkerAccessHint {
         match self {
             AiCli::Codex => WorkerAccessHint::Writable,
-            AiCli::ClaudeCode | AiCli::Copilot | AiCli::Gemini => WorkerAccessHint::Unknown,
+            AiCli::ClaudeCode | AiCli::Copilot | AiCli::Gemini | AiCli::OpenCode => {
+                WorkerAccessHint::Unknown
+            }
         }
     }
 }
@@ -235,7 +242,26 @@ impl SubagentResult {
     }
 }
 
-/// Run a single task with a fresh AI subprocess
+// Pass provider/model and prompt paths as arguments, never shell source.
+fn opencode_command(prompt_file: &str, model: Option<&str>, agent: Option<&str>) -> Command {
+    let mut command = Command::new("opencode");
+    command.arg("run");
+    if let Some(model) = model.filter(|v| !v.trim().is_empty()) {
+        command.args(["--model", model]);
+    }
+    if let Some(agent) = agent.filter(|v| !v.trim().is_empty()) {
+        command.args(["--agent", agent]);
+    }
+    command.args([
+        "--file",
+        prompt_file,
+        "--",
+        "Execute the attached DIAL task. Write the required signal file when finished.",
+    ]);
+    command
+}
+
+/// Run a single task with a fresh AI subprocess.
 fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<SubagentResult> {
     println!(
         "{}",
@@ -246,14 +272,27 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
     println!("{}", dim(&format!("Command: {}", shell_cmd)));
 
     let (shell_program, shell_args) = shell_program_and_args(ai_cli);
-    let mut command = Command::new(shell_program);
-    command.args(shell_args).arg(&shell_cmd);
+    let mut command = if ai_cli == AiCli::OpenCode {
+        opencode_command(
+            prompt_file,
+            config_get("opencode_model")?.as_deref(),
+            config_get("opencode_agent")?.as_deref(),
+        )
+    } else {
+        let mut command = Command::new(shell_program);
+        command.args(shell_args).arg(&shell_cmd);
+        command
+    };
     prepend_current_exe_dir_to_path(&mut command);
 
     let mut child = command
         .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(if ai_cli == AiCli::OpenCode {
+            Stdio::inherit()
+        } else {
+            Stdio::piped()
+        })
         .spawn()
         .map_err(|e| {
             DialError::CommandFailed(format!("Failed to spawn {}: {}", ai_cli.name(), e))
@@ -288,7 +327,7 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
 
     // Wait for process to complete
     let status = child.wait();
-    match status {
+    match &status {
         Ok(s) if s.success() => {
             println!("{}", dim("  └─ Process exited successfully"));
         }
@@ -301,6 +340,12 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
         Err(e) => {
             println!("{}", red(&format!("  └─ Process error: {}", e)));
         }
+    }
+
+    if ai_cli == AiCli::OpenCode && !matches!(status, Ok(s) if s.success()) {
+        return Err(DialError::CommandFailed(
+            "OpenCode exited unsuccessfully; refusing its completion signal.".into(),
+        ));
     }
 
     // Prefer structured signal file over regex parsing of stdout
@@ -375,14 +420,14 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
     let ai_cli = if let Some(name) = ai_cli_name {
         AiCli::from_str(name).ok_or_else(|| {
             DialError::InvalidConfig(format!(
-                "Unknown AI CLI: {}. Use 'claude', 'codex', 'copilot', or 'gemini'",
+                "Unknown AI CLI: {}. Use 'claude', 'codex', 'copilot', 'gemini', or 'opencode'",
                 name
             ))
         })?
     } else if let Some(configured) = config_get("ai_cli")? {
         AiCli::from_str(&configured).ok_or_else(|| {
             DialError::InvalidConfig(format!(
-                "Invalid ai_cli config: {}. Use 'claude', 'codex', 'copilot', or 'gemini'",
+                "Invalid ai_cli config: {}. Use 'claude', 'codex', 'copilot', 'gemini', or 'opencode'",
                 configured
             ))
         })?
@@ -1379,5 +1424,34 @@ DIAL_COMPLETE: Implemented the feature successfully
         assert_eq!(result.learnings[1].0, "gotcha");
         assert_eq!(result.learnings[1].1, "Timeouts need explicit handling");
         assert_eq!(result.raw_output, raw_output);
+    }
+}
+
+#[cfg(test)]
+mod opencode_tests {
+    use super::*;
+    #[test]
+    fn fresh_opencode_session_preserves_literal_arguments() {
+        let command = opencode_command(
+            "a path/$(touch nope).md",
+            Some("provider/model:free"),
+            Some("build"),
+        );
+        let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
+        assert_eq!(AiCli::from_str("opencode"), Some(AiCli::OpenCode));
+        assert_eq!(
+            &args[..7],
+            &[
+                "run",
+                "--model",
+                "provider/model:free",
+                "--agent",
+                "build",
+                "--file",
+                "a path/$(touch nope).md"
+            ]
+        );
+        assert!(!args.contains(&"--continue"));
+        assert!(!args.contains(&"--auto"));
     }
 }
