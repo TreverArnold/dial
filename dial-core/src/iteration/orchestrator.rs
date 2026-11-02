@@ -13,7 +13,7 @@ use crate::learning::{add_learning_with_conn, auto_link_pattern_for_iteration};
 use crate::output::{bold, dim, green, red, yellow};
 use crate::task::auto_unblock_dependents;
 use crate::task::models::Task;
-use crate::MAX_FIX_ATTEMPTS;
+use crate::task::task_attempt_limit;
 use chrono::Local;
 use regex::Regex;
 use std::collections::HashSet;
@@ -728,7 +728,7 @@ pub fn auto_run_with_attempt_limit(
             continue;
         }
 
-        // Check attempt count (per-iteration MAX_FIX_ATTEMPTS)
+        // Check attempt count (per-iteration max_fix_attempts)
         let max_attempt: Option<i32> = conn
             .query_row(
                 "SELECT MAX(attempt_number) FROM iterations WHERE task_id = ?1 AND status = 'failed'",
@@ -739,19 +739,20 @@ pub fn auto_run_with_attempt_limit(
             .flatten();
 
         let attempt_number = max_attempt.unwrap_or(0) + 1;
+        let max_fix_attempts = task_attempt_limit(&conn, task.id)?;
 
-        if attempt_number > MAX_FIX_ATTEMPTS as i32 {
+        if attempt_number > max_fix_attempts as i32 {
             println!(
                 "{}",
                 red(&format!(
                     "Task #{} has failed {} times. Blocking and skipping.",
-                    task.id, MAX_FIX_ATTEMPTS
+                    task.id, max_fix_attempts
                 ))
             );
 
             conn.execute(
                 "UPDATE tasks SET status = 'blocked', blocked_by = ?1 WHERE id = ?2",
-                rusqlite::params![format!("Failed {} times", MAX_FIX_ATTEMPTS), task.id],
+                rusqlite::params![format!("Failed {} times", max_fix_attempts), task.id],
             )?;
 
             let _ = sync_operator_artifacts(&conn);
@@ -759,7 +760,7 @@ pub fn auto_run_with_attempt_limit(
             continue;
         }
 
-        println!("Attempt {} of {}", attempt_number, MAX_FIX_ATTEMPTS);
+        println!("Attempt {} of {}", attempt_number, max_fix_attempts);
 
         // Create iteration record
         let iteration_id = create_iteration(&conn, task.id, attempt_number)?;
@@ -1055,7 +1056,7 @@ pub fn auto_run_with_attempt_limit(
                 )?;
 
                 failed_count += 1;
-                let remaining = MAX_FIX_ATTEMPTS as i32 - attempt_number;
+                let remaining = max_fix_attempts as i32 - attempt_number;
                 println!(
                     "{}",
                     yellow(&format!("Task reset. {} attempts remaining.", remaining))
@@ -1098,7 +1099,7 @@ pub fn auto_run_with_attempt_limit(
                 [task.id],
             )?;
 
-            let remaining = MAX_FIX_ATTEMPTS as i32 - attempt_number;
+            let remaining = max_fix_attempts as i32 - attempt_number;
             println!(
                 "{}",
                 yellow(&format!("Task reset. {} attempts remaining.", remaining))

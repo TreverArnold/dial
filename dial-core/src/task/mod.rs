@@ -10,6 +10,31 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 
+/// Operator-approved per-task ceiling. Raising this grants additional attempts
+/// without deleting failed iterations or resetting lifetime failure counters.
+pub fn task_attempt_limit(conn: &Connection, task_id: i64) -> Result<u32> {
+    use rusqlite::OptionalExtension;
+    let key = format!("task_{task_id}_max_fix_attempts");
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM config WHERE key = ?1", [&key], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match value {
+        None => Ok(crate::MAX_FIX_ATTEMPTS),
+        Some(value) => value
+            .parse::<u32>()
+            .ok()
+            .filter(|limit| *limit > 0 && *limit < i32::MAX as u32)
+            .ok_or_else(|| {
+                DialError::InvalidConfig(format!(
+                    "{key} must be a positive attempt ceiling below {}",
+                    i32::MAX
+                ))
+            }),
+    }
+}
+
 pub fn task_add(description: &str, priority: i32, spec_section_id: Option<i64>) -> Result<i64> {
     task_add_with_metadata(description, priority, spec_section_id, &[], false)
 }
@@ -939,6 +964,27 @@ mod tests {
         conn.execute_batch(schema::SCHEMA).unwrap();
         migrations::run_migrations(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn task_attempt_override_is_scoped_and_rejects_invalid_limits() {
+        let conn = setup_test_db();
+        assert_eq!(task_attempt_limit(&conn, 1).unwrap(), 3);
+        conn.execute(
+            "INSERT INTO config (key,value) VALUES ('task_1_max_fix_attempts','4')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(task_attempt_limit(&conn, 1).unwrap(), 4);
+        assert_eq!(task_attempt_limit(&conn, 2).unwrap(), 3);
+        for value in ["0", "-1", "abc", "2147483647", "4294967296"] {
+            conn.execute(
+                "UPDATE config SET value=?1 WHERE key='task_1_max_fix_attempts'",
+                [value],
+            )
+            .unwrap();
+            assert!(task_attempt_limit(&conn, 1).is_err());
+        }
     }
 
     #[test]

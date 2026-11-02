@@ -24,7 +24,7 @@ use crate::git::{
 };
 use crate::output::{bold, dim, green, print_success, red, yellow};
 use crate::task::models::Task;
-use crate::MAX_FIX_ATTEMPTS;
+use crate::task::task_attempt_limit;
 use chrono::Local;
 use rusqlite::Connection;
 use std::fs;
@@ -173,13 +173,14 @@ pub fn iterate_once() -> Result<(bool, String)> {
         .flatten();
 
     let attempt_number = max_attempt.unwrap_or(0) + 1;
+    let max_fix_attempts = task_attempt_limit(&conn, task.id)?;
 
-    if attempt_number > MAX_FIX_ATTEMPTS as i32 {
+    if attempt_number > max_fix_attempts as i32 {
         println!(
             "{}",
             red(&format!(
                 "Task #{} has failed {} times. Skipping.",
-                task.id, MAX_FIX_ATTEMPTS
+                task.id, max_fix_attempts
             ))
         );
 
@@ -187,7 +188,7 @@ pub fn iterate_once() -> Result<(bool, String)> {
         with_transaction(&conn, |conn| {
             conn.execute(
                 "UPDATE tasks SET status = 'blocked', blocked_by = ?1 WHERE id = ?2",
-                rusqlite::params![format!("Failed {} times", MAX_FIX_ATTEMPTS), task.id],
+                rusqlite::params![format!("Failed {} times", max_fix_attempts), task.id],
             )?;
             Ok(())
         })?;
@@ -199,7 +200,7 @@ pub fn iterate_once() -> Result<(bool, String)> {
     let iteration_id = with_transaction(&conn, |conn| {
         create_iteration(conn, task.id, attempt_number)
     })?;
-    println!("Attempt {} of {}", attempt_number, MAX_FIX_ATTEMPTS);
+    println!("Attempt {} of {}", attempt_number, max_fix_attempts);
     let _ = sync_operator_artifacts(&conn);
 
     // Create checkpoint before task execution (if enabled and in a git repo)
@@ -537,6 +538,7 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
             error_preview.to_string()
         };
 
+        let max_fix_attempts = task_attempt_limit(&conn, task_id)?;
         let mut blocked_due_to_max = false;
 
         with_transaction(&conn, |conn| {
@@ -548,11 +550,11 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
                 |row| row.get(0),
             )?;
 
-            if fail_count >= MAX_FIX_ATTEMPTS as i64 {
+            if fail_count >= max_fix_attempts as i64 {
                 blocked_due_to_max = true;
                 println!(
                     "{}",
-                    red(&format!("\nMax attempts ({}) reached.", MAX_FIX_ATTEMPTS))
+                    red(&format!("\nMax attempts ({}) reached.", max_fix_attempts))
                 );
 
                 // Find last successful commit
@@ -578,14 +580,14 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
 
                 conn.execute(
                     "UPDATE tasks SET status = 'blocked', blocked_by = ?1 WHERE id = ?2",
-                    rusqlite::params![format!("Failed {} attempts", MAX_FIX_ATTEMPTS), task_id],
+                    rusqlite::params![format!("Failed {} attempts", max_fix_attempts), task_id],
                 )?;
             } else {
                 conn.execute(
                     "UPDATE tasks SET status = 'pending' WHERE id = ?1",
                     [task_id],
                 )?;
-                let remaining = MAX_FIX_ATTEMPTS as i64 - fail_count;
+                let remaining = max_fix_attempts as i64 - fail_count;
                 println!(
                     "{}",
                     yellow(&format!(

@@ -470,6 +470,9 @@ dial task chronic --threshold 5        # Custom threshold
 
 Tasks track `total_attempts` and `total_failures` across all iterations. Auto-run auto-blocks tasks exceeding `max_total_failures` (default: 10).
 
+After reviewing a blocked task, an operator can grant a task-specific attempt ceiling with `dial config set task_1_max_fix_attempts 4`. This allows Task 1 one additional attempt beyond the default three without deleting iterations or clearing lifetime counters. The task must separately be returned to pending after review; changing the ceiling does not unblock it. Other tasks keep their default ceiling, chronic-failure protection still applies, and `auto-run --max-attempts 1` still bounds each invocation. Invalid ceilings fail before dispatch.
+
+
 ### Per-Pattern Metrics
 ```bash
 dial patterns metrics                  # Table of per-pattern cost/time/occurrences

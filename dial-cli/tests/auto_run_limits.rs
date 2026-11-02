@@ -264,3 +264,74 @@ fn successful_retry_at_attempt_limit_returns_success() {
         .assert()
         .stdout(predicates::str::contains("Status: completed"));
 }
+
+#[test]
+fn reviewed_task_can_run_a_fourth_attempt_without_erasing_failures() {
+    let f = Fixture::new("no-signal");
+    f.cmd()
+        .args(["task", "depend", "2", "1"])
+        .assert()
+        .success();
+    for _ in 0..3 {
+        f.cmd()
+            .args(["auto-run", "--cli", "opencode", "--max-attempts", "1"])
+            .assert()
+            .failure();
+    }
+    assert_eq!(f.calls(), 3);
+    f.cmd()
+        .args(["config", "set", "task_1_max_fix_attempts", "4"])
+        .assert()
+        .success();
+    fs::write(f.dir.path().join("bin/opencode"),
+        "#!/bin/sh\nprintf 'attempt\n' >> calls\nprintf 'DIAL_COMPLETE: reviewed task finished\n'\n").unwrap();
+    f.cmd()
+        .args([
+            "auto-run",
+            "--cli",
+            "opencode",
+            "--max",
+            "1",
+            "--max-attempts",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Attempt 4 of 4"));
+    assert_eq!(f.calls(), 4);
+    f.cmd()
+        .args(["task", "show", "1"])
+        .assert()
+        .stdout(predicates::str::contains("Status: completed"))
+        .stdout(predicates::str::contains("Attempts: 4"))
+        .stdout(predicates::str::contains("Failures: 3"));
+}
+
+#[test]
+fn task_attempt_override_stops_at_its_ceiling() {
+    let f = Fixture::new("no-signal");
+    f.cmd()
+        .args(["task", "depend", "2", "1"])
+        .assert()
+        .success();
+    f.cmd()
+        .args(["config", "set", "task_1_max_fix_attempts", "4"])
+        .assert()
+        .success();
+    for _ in 0..4 {
+        f.cmd()
+            .args(["auto-run", "--cli", "opencode", "--max-attempts", "1"])
+            .assert()
+            .failure();
+    }
+    f.cmd()
+        .args(["auto-run", "--cli", "opencode", "--max-attempts", "1"])
+        .assert()
+        .stdout(predicates::str::contains("has failed 4 times"));
+    assert_eq!(f.calls(), 4);
+    f.cmd()
+        .args(["task", "show", "1"])
+        .assert()
+        .stdout(predicates::str::contains("Status: blocked"))
+        .stdout(predicates::str::contains("Failures: 4"));
+}
