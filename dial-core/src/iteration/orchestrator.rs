@@ -156,6 +156,7 @@ pub struct SubagentResult {
     pub complete: bool,
     pub complete_message: Option<String>,
     pub blocked: bool,
+    pub permission_denied: bool,
     pub blocked_message: Option<String>,
     pub learnings: Vec<(String, String)>, // (category, description)
     pub raw_output: String,
@@ -260,6 +261,7 @@ fn opencode_command(
     if let Some(agent) = agent.filter(|v| !v.trim().is_empty()) {
         command.args(["--agent", agent]);
     }
+    command.args(["--format", "json"]);
     command.args([
         "--file",
         prompt_file,
@@ -321,30 +323,93 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
         })?;
 
     let stdout = child.stdout.take().unwrap();
-    let reader = BufReader::new(stdout);
-
+    let (sender, receiver) = std::sync::mpsc::sync_channel(64);
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let mut output = String::new();
     let start = std::time::Instant::now();
+    let mut last_permission_check = start;
+    let mut permission_rejection = None;
 
-    // Stream output and collect it
-    for line in reader.lines() {
+    loop {
         if start.elapsed().as_secs() > timeout_secs {
             let _ = child.kill();
+            let _ = child.wait();
             return Err(DialError::CommandFailed(format!(
-                "Subagent timed out after {}s",
-                timeout_secs
+                "Subagent timed out after {timeout_secs}s"
             )));
         }
-
-        match line {
-            Ok(line) => {
-                // Print output in real-time (dimmed for visual separation)
+        if last_permission_check.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(session) = &live {
+                // The server exposes tool failures even when `opencode run` exits
+                // successfully without printing a completion signal.
+                match session.permission_rejection() {
+                    Ok(reason) => permission_rejection = reason,
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    }
+                }
+            }
+            last_permission_check = std::time::Instant::now();
+        }
+        if permission_rejection.is_some() {
+            break;
+        }
+        match receiver.recv_timeout(std::time::Duration::from_millis(250)) {
+            Ok(Ok(line)) => {
                 println!("  │ {}", dim(&line));
                 output.push_str(&line);
                 output.push('\n');
+                if ai_cli == AiCli::OpenCode {
+                    permission_rejection = super::opencode_permission::rejected_event(&line);
+                    if permission_rejection.is_some() {
+                        break;
+                    }
+                }
             }
-            Err(_) => break,
+            Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
         }
+    }
+    // Catch a rejection that arrived between the last poll and process exit.
+    if permission_rejection.is_none() {
+        if let Some(session) = &live {
+            match session.permission_rejection() {
+                Ok(reason) => permission_rejection = reason,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            }
+        }
+    }
+    if let Some(reason) = permission_rejection {
+        let _ = child.kill();
+        let _ = child.wait();
+        // Stop the owned server before discarding a rejected completion signal,
+        // so it cannot be consumed by a later operator-authorized attempt.
+        drop(live);
+        match fs::remove_file(get_dial_dir().join("signal.json")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Rejection takes precedence over any completion signal from the worker.
+        return Ok(SubagentResult {
+            blocked: true,
+            permission_denied: true,
+            blocked_message: Some(reason),
+            raw_output: output,
+            ..Default::default()
+        });
     }
 
     // Wait for process to complete
@@ -438,6 +503,20 @@ impl IterationMode {
 
 /// The main auto-run orchestration loop
 pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Result<()> {
+    auto_run_with_attempt_limit(max_iterations, None, ai_cli_name)
+}
+
+/// Bound worker attempts independently from completed tasks.
+pub fn auto_run_with_attempt_limit(
+    max_iterations: Option<u32>,
+    max_attempts: Option<u32>,
+    ai_cli_name: Option<&str>,
+) -> Result<()> {
+    if max_attempts == Some(0) {
+        return Err(DialError::InvalidConfig(
+            "max-attempts must be positive".into(),
+        ));
+    }
     // Determine which AI CLI to use
     let ai_cli = if let Some(name) = ai_cli_name {
         AiCli::from_str(name).ok_or_else(|| {
@@ -490,6 +569,8 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
     println!("{}", dim("Create .dial/stop file to stop gracefully."));
     println!();
 
+    let mut attempt_count = 0u32;
+    let mut last_attempt_complete = false;
     let mut completed_count = 0u32;
     let mut failed_count = 0u32;
 
@@ -498,6 +579,16 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
         if stop_file.exists() {
             println!("{}", yellow("\nStop flag detected. Stopping gracefully."));
             fs::remove_file(&stop_file)?;
+            break;
+        }
+
+        if max_attempts.is_some_and(|limit| attempt_count >= limit) {
+            show_auto_run_summary(completed_count, failed_count)?;
+            if !last_attempt_complete {
+                return Err(DialError::CommandFailed(format!(
+                    "Stopped after {attempt_count} worker attempt(s); unfinished work requires review."
+                )));
+            }
             break;
         }
 
@@ -672,6 +763,8 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
 
         // Create iteration record
         let iteration_id = create_iteration(&conn, task.id, attempt_number)?;
+        attempt_count += 1;
+        last_attempt_complete = false;
         let _ = sync_operator_artifacts(&conn);
 
         // Generate sub-agent prompt
@@ -684,7 +777,19 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
 
         // Spawn the sub-agent
         println!();
-        let result = run_subagent(ai_cli, prompt_file.to_str().unwrap(), timeout_secs)?;
+        let result = match run_subagent(ai_cli, prompt_file.to_str().unwrap(), timeout_secs) {
+            Ok(result) => result,
+            Err(error) => {
+                let reason = format!("Worker execution stopped: {error}");
+                complete_iteration(&conn, iteration_id, "failed", None, Some(&reason))?;
+                conn.execute(
+                    "UPDATE tasks SET status = 'blocked', blocked_by = ?1 WHERE id = ?2",
+                    rusqlite::params![reason, task.id],
+                )?;
+                let _ = sync_operator_artifacts(&conn);
+                return Err(error);
+            }
+        };
 
         // Process learnings — auto-link to failure pattern if current iteration has failures
         let auto_pattern_id = auto_link_pattern_for_iteration(&conn, iteration_id);
@@ -748,6 +853,9 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
             });
             let _ = sync_operator_artifacts(&conn);
             failed_count += 1;
+            if result.permission_denied {
+                return Err(DialError::CommandFailed(msg.to_string()));
+            }
             continue;
         }
 
@@ -885,6 +993,7 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
                 });
                 let _ = sync_operator_artifacts(&conn);
                 completed_count += 1;
+                last_attempt_complete = true;
 
                 // Check iteration_mode for review pause
                 let should_pause = match &iteration_mode {
@@ -945,6 +1054,7 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
                     [task.id],
                 )?;
 
+                failed_count += 1;
                 let remaining = MAX_FIX_ATTEMPTS as i32 - attempt_number;
                 println!(
                     "{}",
@@ -968,6 +1078,7 @@ pub fn auto_run(max_iterations: Option<u32>, ai_cli_name: Option<&str>) -> Resul
                 let _ = sync_operator_artifacts(&conn);
             }
         } else {
+            failed_count += 1;
             // No completion signal - treat as incomplete
             println!(
                 "{}",
@@ -1463,13 +1574,15 @@ mod opencode_tests {
         let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
         assert_eq!(AiCli::from_str("opencode"), Some(AiCli::OpenCode));
         assert_eq!(
-            &args[..7],
+            &args[..9],
             &[
                 "run",
                 "--model",
                 "provider/model:free",
                 "--agent",
                 "build",
+                "--format",
+                "json",
                 "--file",
                 "a path/$(touch nope).md"
             ]

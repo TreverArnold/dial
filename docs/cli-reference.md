@@ -395,14 +395,21 @@ dial run [--max N]
 Fully automated orchestration: spawns a fresh AI subprocess per task, parses signals, validates, and loops.
 
 ```bash
-dial auto-run [--max N] [--cli NAME] [--dry-run]
+dial auto-run [--max N] [--max-attempts N] [--cli NAME] [--dry-run]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max` | (none) | Maximum number of tasks to process |
+| `--max` | (none) | Maximum number of completed tasks |
+| `--max-attempts` | (none) | Positive limit on worker attempts in this invocation, including unsuccessful attempts |
 | `--cli` | `claude` | AI CLI: `claude`, `codex`, `copilot`, or `gemini` |
 | `--dry-run` | false | Show task execution order without running |
+
+Use `--max 1 --max-attempts 1` to return after one worker attempt. An exhausted attempt budget with unfinished work exits nonzero and retains the task and failed iteration for review. The existing per-task retry ceiling is unchanged.
+
+OpenCode uses structured tool errors to identify permission rejection. The rejected command is recorded as a blocker, completion signals are refused, and the loop stops immediately without another attempt or task. Live mode polls only its own session; this does not approve or broaden permissions. Ordinary test failures and quoted error text are not permission blockers.
+
+Regression checks: `cargo test -p dial-cli --test auto_run_limits --locked` exercises these limits and permission failures with fake local workers, including a silent live session. It does not invoke a model or open a viewer. `cargo test -p dial-core --lib iteration:: --locked` covers signal parsing and structured permission errors.
 
 **Signal parsing:** After each subprocess exits, DIAL first checks for `.dial/signal.json` (structured JSON signals). If the file doesn't exist, it falls back to regex parsing of stdout for `DIAL_COMPLETE`, `DIAL_BLOCKED`, and `DIAL_LEARNING` signals.
 

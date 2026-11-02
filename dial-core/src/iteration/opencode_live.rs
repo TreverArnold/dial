@@ -8,6 +8,20 @@ pub(super) struct LiveSession {
     server: Child,
     pub url: String,
     pub id: String,
+    directory: String,
+}
+
+impl LiveSession {
+    pub fn permission_rejection(&self) -> Result<Option<String>> {
+        let messages = request(
+            &format!(
+                "{}/session/{}/message?directory={}&limit=20",
+                self.url, self.id, self.directory
+            ),
+            None,
+        )?;
+        Ok(super::opencode_permission::rejected_message(&messages))
+    }
 }
 
 impl Drop for LiveSession {
@@ -103,6 +117,7 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
         server,
         url,
         id: String::new(),
+        directory: String::new(),
     };
     let directory = std::env::current_dir()?;
     let encoded: String = directory
@@ -116,6 +131,7 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
             }
         })
         .collect();
+    live.directory = encoded.clone();
     let endpoint = format!("{}/session?directory={encoded}", live.url);
     let body = serde_json::json!({"title": title}).to_string();
     let result = request(&endpoint, Some(&body))?;

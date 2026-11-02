@@ -698,6 +698,16 @@ impl Engine {
         iteration::auto_run(max_iterations, cli)
     }
 
+    /// Run with a separate per-invocation worker-attempt limit.
+    pub async fn auto_run_with_attempt_limit(
+        &self,
+        max_iterations: Option<u32>,
+        max_attempts: Option<u32>,
+        cli: Option<&str>,
+    ) -> Result<()> {
+        iteration::auto_run_with_attempt_limit(max_iterations, max_attempts, cli)
+    }
+
     // --- Approval ---
 
     /// Get the current approval mode.

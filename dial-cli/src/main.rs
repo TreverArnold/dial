@@ -297,9 +297,13 @@ enum Commands {
 
     /// Run automated orchestration with fresh AI subprocesses per task
     AutoRun {
-        /// Max iterations before stopping
+        /// Maximum completed tasks before stopping
         #[arg(long)]
         max: Option<u32>,
+
+        /// Maximum worker attempts, including unsuccessful attempts
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        max_attempts: Option<u32>,
 
         /// AI CLI to use (claude, codex, copilot, gemini, opencode)
         #[arg(long, default_value = "claude")]
@@ -1420,6 +1424,7 @@ async fn run_command(command: Commands) -> anyhow::Result<()> {
 
         Commands::AutoRun {
             max,
+            max_attempts,
             cli,
             dry_run,
             format,
@@ -1432,7 +1437,9 @@ async fn run_command(command: Commands) -> anyhow::Result<()> {
                     print_dry_run_result(&result);
                 }
             } else {
-                engine.auto_run(max, Some(&cli)).await?;
+                engine
+                    .auto_run_with_attempt_limit(max, max_attempts, Some(&cli))
+                    .await?;
             }
         }
     }

@@ -1,5 +1,6 @@
 pub mod context;
 mod opencode_live;
+mod opencode_permission;
 pub mod orchestrator;
 pub mod signal;
 mod storybook;
@@ -32,7 +33,7 @@ pub use context::{
     gather_context, gather_context_budgeted, gather_context_items, gather_context_items_pure,
     generate_subagent_prompt,
 };
-pub use orchestrator::auto_run;
+pub use orchestrator::{auto_run, auto_run_with_attempt_limit};
 pub use signal::{read_signal_file, write_signal_file, SignalFile, SubagentSignal};
 pub use validation::{
     run_validation, run_validation_with_details, PipelineStepResult, ValidationResult,
