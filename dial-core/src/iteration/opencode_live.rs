@@ -127,13 +127,15 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
     live.id = id.clone();
     let viewer = Command::new("konsole")
         .args([
-            "-e",
-            "opencode",
-            "attach",
-            &live.url,
-            "--dir",
+            "--hold",
+            "--workdir",
             &directory.to_string_lossy(),
-            "--session",
+            "-e",
+            "bash",
+            "-lc",
+            "exec opencode attach \"$1\" --session \"$2\"",
+            "dial-viewer",
+            &live.url,
             &id,
         ])
         .stdout(Stdio::null())
