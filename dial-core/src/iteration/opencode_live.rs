@@ -33,7 +33,10 @@ impl Drop for LiveSession {
 
 fn request(url: &str, body: Option<&str>) -> Result<Value> {
     let mut cmd = Command::new("curl");
-    cmd.args(["--fail", "--silent", "--show-error", "--max-time", "3"]);
+    // Creating a session can initialize the project after the health endpoint is
+    // ready. Allow that cold start without slowing health/permission polling.
+    let timeout = if body.is_some() { "30" } else { "3" };
+    cmd.args(["--fail", "--silent", "--show-error", "--max-time", timeout]);
     if let Some(body) = body {
         cmd.args([
             "--request",
@@ -164,4 +167,57 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
     );
     drop(viewer);
     Ok(live)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn server(delay: Duration, status: &str) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/session", listener.local_addr().unwrap());
+        let status = status.to_owned();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = [0; 4096];
+            let _ = stream.read(&mut buffer).unwrap();
+            std::thread::sleep(delay);
+            let body = r#"{"id":"ses_delayed"}"#;
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn session_creation_allows_cold_start_longer_than_health_deadline() {
+        let (url, handle) = server(Duration::from_millis(3300), "200 OK");
+        let result = request(&url, Some("{}"));
+        handle.join().unwrap();
+        assert_eq!(result.unwrap()["id"], "ses_delayed");
+    }
+
+    #[test]
+    fn health_request_keeps_short_deadline() {
+        let (url, handle) = server(Duration::from_millis(3300), "200 OK");
+        let result = request(&url, None);
+        handle.join().unwrap();
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn session_creation_still_rejects_http_failure() {
+        let (url, handle) = server(Duration::ZERO, "503 Service Unavailable");
+        let result = request(&url, Some("{}"));
+        handle.join().unwrap();
+        assert!(result.is_err());
+    }
 }
