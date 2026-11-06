@@ -301,6 +301,86 @@ esac
         .stdout(predicates::str::contains("Status: blocked"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn live_viewer_closes_after_completion_blocker_and_timeout() {
+    for mode in ["complete", "blocked", "timeout"] {
+        let f = Fixture::new("no-signal");
+        let bin = f.dir.path().join("bin");
+        let worker = match mode {
+            "complete" => "printf 'DIAL_COMPLETE: synthetic task finished\\n'",
+            "blocked" => "printf 'DIAL_BLOCKED: synthetic blocker\\n'",
+            _ => "exec sleep 30",
+        };
+        let scripts = [
+            ("opencode", format!("#!/bin/sh\nif [ \"$1\" = serve ]; then exec sleep 30; fi\nwhile [ ! -f viewer.pid ]; do sleep 0.01; done\n{worker}\n")),
+            ("konsole", "#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nprintf '%s' $$ > viewer.pid\nexec sleep 30\n".to_owned()),
+            ("curl", r#"#!/bin/sh
+for arg do endpoint="$arg"; done
+case "$endpoint" in
+  */global/health) if [ ! -f health-seen ]; then touch health-seen; exit 22; fi; printf '{"healthy":true}' ;;
+  */session\?*) printf '{"id":"ses_fake"}' ;;
+  */session/ses_fake/message\?*) printf '[]' ;;
+  *) exit 23 ;;
+esac
+"#.to_owned()),
+        ];
+        for (name, body) in scripts {
+            let path = bin.join(name);
+            fs::write(&path, body).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for (key, value) in [
+            ("opencode_live", "true"),
+            ("subagent_timeout", "1"),
+            // A successful task must retain its viewer throughout validation.
+            (
+                "build_cmd",
+                "test -f viewer.pid && kill -0 $(cat viewer.pid)",
+            ),
+        ] {
+            f.cmd()
+                .args(["config", "set", key, value])
+                .assert()
+                .success();
+        }
+        let result = f
+            .cmd()
+            .timeout(std::time::Duration::from_secs(10))
+            .args([
+                "auto-run",
+                "--cli",
+                "opencode",
+                "--max",
+                "1",
+                "--max-attempts",
+                "1",
+            ])
+            .assert();
+        if mode == "complete" {
+            result.success();
+        } else {
+            result.failure();
+        }
+        let pid: u32 = fs::read_to_string(f.dir.path().join("viewer.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "viewer survived {mode}"
+        );
+        f.cmd()
+            .args(["task", "show", "1"])
+            .assert()
+            .stdout(predicates::str::contains(if mode == "complete" {
+                "Status: completed"
+            } else {
+                "Status: blocked"
+            }));
+    }
+}
+
 #[test]
 fn successful_retry_at_attempt_limit_returns_success() {
     let f = Fixture::new("retry-success");

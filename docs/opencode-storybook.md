@@ -76,6 +76,9 @@ DIAL starts a loopback OpenCode server on port 4097, creates a fresh session, op
 attached to that exact session, then sends the task through `opencode run --attach --session`.
 The viewer and worker therefore display the same conversation and tool activity. DIAL still owns
 validation and commits; do not send a second prompt from the viewer while the worker is running.
-The server stops after the attempt. If port 4097 is occupied, set `opencode_live_port` to a free
+The viewer remains open while DIAL validates and closes as the attempt ends: complete, blocked,
+failed, or waiting for approval. It also closes if the DIAL process terminates, including
+an external timeout. A closed viewer signals that the attempt ended; consult DIAL status and output
+to determine the outcome. The server stops after the attempt. If port 4097 is occupied, set `opencode_live_port` to a free
 port. This mode requires Linux, Konsole, and `curl` on PATH; other environments keep the original
 headless runner. Disable it with `dial config set opencode_live false`.

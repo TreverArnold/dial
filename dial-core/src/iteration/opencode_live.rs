@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 pub(super) struct LiveSession {
     server: Child,
+    viewer: Option<Child>,
     pub url: String,
     pub id: String,
     directory: String,
@@ -26,6 +27,10 @@ impl LiveSession {
 
 impl Drop for LiveSession {
     fn drop(&mut self) {
+        if let Some(viewer) = &mut self.viewer {
+            let _ = viewer.kill();
+            let _ = viewer.wait();
+        }
         let _ = self.server.kill();
         let _ = self.server.wait();
     }
@@ -118,6 +123,7 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
     }
     let mut live = LiveSession {
         server,
+        viewer: None,
         url,
         id: String::new(),
         directory: String::new(),
@@ -144,9 +150,10 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
         .ok_or_else(|| DialError::CommandFailed("OpenCode session response has no ID".into()))?
         .to_string();
     live.id = id.clone();
-    let viewer = Command::new("konsole")
+    let mut viewer = Command::new("konsole");
+    viewer
         .args([
-            "--hold",
+            "--nofork",
             "--workdir",
             &directory.to_string_lossy(),
             "-e",
@@ -158,15 +165,43 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
             &id,
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| DialError::CommandFailed(format!("Could not open OpenCode viewer: {e}")))?;
+        .stderr(Stdio::null());
+    bind_viewer_to_parent(&mut viewer);
+    live.viewer =
+        Some(viewer.spawn().map_err(|e| {
+            DialError::CommandFailed(format!("Could not open OpenCode viewer: {e}"))
+        })?);
     println!(
         "OpenCode session {id} is opening in Konsole. Backend: {}",
         live.url
     );
-    drop(viewer);
     Ok(live)
+}
+
+fn bind_viewer_to_parent(viewer: &mut Command) {
+    // The outer deadline can terminate Dial without running Rust destructors.
+    // Bind this dedicated Konsole process to Dial so it closes in that case too.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let parent = std::process::id() as libc::pid_t;
+        unsafe {
+            viewer.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Dial exited during viewer startup",
+                    ));
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = viewer;
 }
 
 #[cfg(test)]
@@ -174,6 +209,75 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn dropping_live_session_stops_its_viewer_and_server() {
+        let server = Command::new("sleep").arg("30").spawn().unwrap();
+        let viewer = Command::new("sleep").arg("30").spawn().unwrap();
+        let server_id = server.id();
+        let viewer_id = viewer.id();
+        drop(LiveSession {
+            server,
+            viewer: Some(viewer),
+            url: String::new(),
+            id: String::new(),
+            directory: String::new(),
+        });
+        #[cfg(target_os = "linux")]
+        for id in [server_id, viewer_id] {
+            assert!(!std::path::Path::new(&format!("/proc/{id}")).exists());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn viewer_exits_when_owner_dies_without_cleanup() {
+        const CHILD: &str = "DIAL_VIEWER_PARENT_DEATH_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let mut command = Command::new("sleep");
+            command
+                .arg("30")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            bind_viewer_to_parent(&mut command);
+            let viewer = command.spawn().unwrap();
+            println!("viewer_pid={}", viewer.id());
+            std::process::exit(0);
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "iteration::opencode_live::tests::viewer_exits_when_owner_dies_without_cleanup",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let id: u32 = stdout
+            .split("viewer_pid=")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{id}/stat"));
+            if stat.as_ref().map_or(true, |s| {
+                s.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with('Z'))
+            }) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "viewer survived owner exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     fn server(delay: Duration, status: &str) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

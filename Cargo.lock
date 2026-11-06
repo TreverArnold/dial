@@ -275,6 +275,7 @@ dependencies = [
  "chrono",
  "dirs",
  "lazy_static",
+ "libc",
  "regex",
  "rusqlite",
  "serde",

@@ -272,7 +272,12 @@ fn opencode_command(
 }
 
 /// Run a single task with a fresh AI subprocess.
-fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<SubagentResult> {
+fn run_subagent(
+    ai_cli: AiCli,
+    prompt_file: &str,
+    timeout_secs: u64,
+    live: &mut Option<super::opencode_live::LiveSession>,
+) -> Result<SubagentResult> {
     println!(
         "{}",
         dim(&format!("Spawning {} subprocess...", ai_cli.name()))
@@ -281,18 +286,18 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
     let shell_cmd = ai_cli.build_command(prompt_file);
     println!("{}", dim(&format!("Command: {}", shell_cmd)));
 
-    let live =
-        if ai_cli == AiCli::OpenCode && config_get("opencode_live")?.as_deref() == Some("true") {
-            let port = config_get("opencode_live_port")?
-                .unwrap_or_else(|| "4097".into())
-                .parse::<u16>()
-                .map_err(|_| {
-                    DialError::InvalidConfig("opencode_live_port must be a valid port".into())
-                })?;
-            Some(super::opencode_live::start(port, "DIAL worker")?)
-        } else {
-            None
-        };
+    *live = if ai_cli == AiCli::OpenCode && config_get("opencode_live")?.as_deref() == Some("true")
+    {
+        let port = config_get("opencode_live_port")?
+            .unwrap_or_else(|| "4097".into())
+            .parse::<u16>()
+            .map_err(|_| {
+                DialError::InvalidConfig("opencode_live_port must be a valid port".into())
+            })?;
+        Some(super::opencode_live::start(port, "DIAL worker")?)
+    } else {
+        None
+    };
     let (shell_program, shell_args) = shell_program_and_args(ai_cli);
     let mut command = if ai_cli == AiCli::OpenCode {
         opencode_command(
@@ -345,7 +350,7 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
             )));
         }
         if last_permission_check.elapsed() >= std::time::Duration::from_secs(1) {
-            if let Some(session) = &live {
+            if let Some(session) = live.as_ref() {
                 // The server exposes tool failures even when `opencode run` exits
                 // successfully without printing a completion signal.
                 match session.permission_rejection() {
@@ -380,7 +385,7 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
     }
     // Catch a rejection that arrived between the last poll and process exit.
     if permission_rejection.is_none() {
-        if let Some(session) = &live {
+        if let Some(session) = live.as_ref() {
             match session.permission_rejection() {
                 Ok(reason) => permission_rejection = reason,
                 Err(error) => {
@@ -396,7 +401,7 @@ fn run_subagent(ai_cli: AiCli, prompt_file: &str, timeout_secs: u64) -> Result<S
         let _ = child.wait();
         // Stop the owned server before discarding a rejected completion signal,
         // so it cannot be consumed by a later operator-authorized attempt.
-        drop(live);
+        drop(live.take());
         match fs::remove_file(get_dial_dir().join("signal.json")) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -778,7 +783,15 @@ pub fn auto_run_with_attempt_limit(
 
         // Spawn the sub-agent
         println!();
-        let result = match run_subagent(ai_cli, prompt_file.to_str().unwrap(), timeout_secs) {
+        // Keep the viewer open through validation and outcome recording, not
+        // just until the worker emits a signal. Drop it on every exit path.
+        let mut live = None;
+        let result = match run_subagent(
+            ai_cli,
+            prompt_file.to_str().unwrap(),
+            timeout_secs,
+            &mut live,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 let reason = format!("Worker execution stopped: {error}");
