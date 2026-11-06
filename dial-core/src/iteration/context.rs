@@ -1,3 +1,4 @@
+use super::validation;
 use crate::artifacts::render_patterns_context;
 use crate::budget::{self, ContextItem};
 use crate::errors::Result;
@@ -153,11 +154,7 @@ fn gather_context_impl(conn: &Connection, task: &Task, include_signs: bool) -> R
             if !results.is_empty() {
                 context.push("## Related Specifications\n".to_string());
                 for section in results.iter().take(3) {
-                    let preview = if section.content.len() > 500 {
-                        &section.content[..500]
-                    } else {
-                        &section.content
-                    };
+                    let preview = validation::truncate_str(&section.content, 500);
                     context.push(format!(
                         "### {} ({})\n{}",
                         section.title, section.section_id, preview
@@ -191,11 +188,7 @@ fn gather_context_impl(conn: &Connection, task: &Task, include_signs: bool) -> R
         if !related_specs.is_empty() {
             context.push("## Related Specifications\n".to_string());
             for (heading, content) in related_specs {
-                let preview = if content.len() > 500 {
-                    &content[..500]
-                } else {
-                    &content
-                };
+                let preview = validation::truncate_str(&content, 500);
                 context.push(format!("### {}\n{}", heading, preview));
             }
         }
@@ -282,11 +275,7 @@ fn gather_context_impl(conn: &Connection, task: &Task, include_signs: bool) -> R
         let mut seen_pattern_ids: Vec<i64> = Vec::new();
 
         for (error_text, pattern_key) in &failures {
-            let preview = if error_text.len() > 200 {
-                &error_text[..200]
-            } else {
-                error_text
-            };
+            let preview = validation::truncate_str(&error_text, 200);
             context.push(format!("- **{}**: {}", pattern_key, preview));
         }
 
@@ -458,11 +447,7 @@ fn gather_context_items_impl(
         // PRD: FTS search
         if let Ok(results) = prd::prd_search_sections(prd_db, &task.description) {
             for section in results.iter().take(3) {
-                let preview = if section.content.len() > 500 {
-                    &section.content[..500]
-                } else {
-                    &section.content
-                };
+                let preview = validation::truncate_str(&section.content, 500);
                 items.push(ContextItem::new(
                     &format!("PRD: {}", section.title),
                     preview,
@@ -498,11 +483,7 @@ fn gather_context_items_impl(
             .collect();
 
         for (heading, content) in related_specs {
-            let preview = if content.len() > 500 {
-                &content[..500]
-            } else {
-                &content
-            };
+            let preview = validation::truncate_str(&content, 500);
             items.push(ContextItem::new(
                 &format!("Spec: {}", heading),
                 preview,
@@ -603,11 +584,7 @@ fn gather_context_items_impl(
         let content = failures
             .iter()
             .map(|(error_text, key)| {
-                let preview = if error_text.len() > 200 {
-                    &error_text[..200]
-                } else {
-                    error_text
-                };
+                let preview = validation::truncate_str(&error_text, 200);
                 format!("- **{}**: {}", key, preview)
             })
             .collect::<Vec<_>>()

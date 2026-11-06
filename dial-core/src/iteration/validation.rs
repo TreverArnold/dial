@@ -512,18 +512,36 @@ fn run_legacy_validation(conn: &Connection, iteration_id: i64) -> Result<Validat
     })
 }
 
-/// Truncate a string to max_len, returning a &str slice.
-fn truncate_str(s: &str, max_len: usize) -> &str {
-    if s.len() > max_len {
-        &s[..max_len]
-    } else {
-        s
+/// Bound stored previews by bytes without splitting a UTF-8 character.
+pub(super) fn truncate_str(s: &str, max_len: usize) -> &str {
+    let mut end = max_len.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
     }
+    &s[..end]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_previews_preserve_utf8_at_byte_limits() {
+        for limit in [200, 500, 1000, 2000] {
+            for marker in ["é", "✔", "🧪"] {
+                for split in 1..marker.len() {
+                    let prefix = "x".repeat(limit - split);
+                    let output = format!("{prefix}{marker} test result\n");
+                    assert_eq!(truncate_str(&output, limit), prefix);
+                }
+            }
+        }
+        assert_eq!(truncate_str("✔ passed", 3), "✔");
+        assert_eq!(truncate_str("✔", 0), "");
+        assert_eq!(truncate_str("", 500), "");
+        assert_eq!(truncate_str("short ✔", 500), "short ✔");
+        assert_eq!(truncate_str("abcdef", 3), "abc");
+    }
 
     #[test]
     fn run_command_normalizes_unicode_dash_flags() {

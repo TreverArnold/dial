@@ -23,7 +23,7 @@ use std::process::{Command, Stdio};
 
 use super::context::generate_autonomous_subagent_prompt;
 use super::signal::{read_signal_file, signal_file_to_result};
-use super::validation::run_validation;
+use super::validation::{run_validation, truncate_str};
 use super::worker_access::{
     probe_worker_write_access, record_worker_access_block, WorkerAccess, WorkerAccessHint,
     READ_ONLY_WORKER_REASON,
@@ -1046,7 +1046,7 @@ pub fn auto_run_with_attempt_limit(
                     iteration_id,
                     "failed",
                     None,
-                    Some(&error_output[..error_output.len().min(500)]),
+                    Some(truncate_str(&error_output, 500)),
                 )?;
 
                 // Reset task for retry
@@ -1067,7 +1067,7 @@ pub fn auto_run_with_attempt_limit(
                     iteration_id,
                     attempt_number,
                     outcome: ProgressOutcome::Failed,
-                    summary: Some(error_output[..error_output.len().min(500)].to_string()),
+                    summary: Some(truncate_str(&error_output, 500).to_string()),
                     changed_files_summary: if git_is_repo() {
                         Some(git_diff_stat().unwrap_or_default())
                     } else {

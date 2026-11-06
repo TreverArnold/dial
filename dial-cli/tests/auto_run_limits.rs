@@ -77,6 +77,56 @@ printf '%s\n' '{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"
 }
 
 #[test]
+fn unicode_validation_output_finalizes_success_and_failure() {
+    for succeeds in [true, false] {
+        let f = Fixture::new("complete");
+        // Both preview limits fall inside a checkmark, as in Node test output.
+        let output = format!("{}✔{}✔ done\n", "x".repeat(498), "y".repeat(497));
+        fs::write(f.dir.path().join("verification.txt"), output).unwrap();
+        let command = if succeeds {
+            "cat verification.txt"
+        } else {
+            "cat verification.txt; exit 1"
+        };
+        f.cmd()
+            .args(["config", "set", "test_cmd", command])
+            .assert()
+            .success();
+        let result = f
+            .cmd()
+            .args([
+                "auto-run",
+                "--cli",
+                "opencode",
+                "--max",
+                "1",
+                "--max-attempts",
+                "1",
+            ])
+            .assert();
+        if succeeds {
+            result.success();
+        } else {
+            result
+                .failure()
+                .stderr(predicates::str::contains("Stopped after 1 worker attempt"));
+        }
+        f.cmd()
+            .args(["task", "show", "1"])
+            .assert()
+            .stdout(predicates::str::contains(if succeeds {
+                "Status: completed"
+            } else {
+                "Status: pending"
+            }));
+        f.cmd()
+            .args(["status"])
+            .assert()
+            .stdout(predicates::str::contains("No iteration in progress."));
+    }
+}
+
+#[test]
 fn no_signal_stops_after_one_attempt_and_preserves_pending_task() {
     let f = Fixture::new("no-signal");
     f.cmd()

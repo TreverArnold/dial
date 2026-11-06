@@ -518,18 +518,10 @@ pub fn validate_current_with_details() -> Result<ValidateResult> {
         }
 
         // Build notes with diff info for retry context
-        let error_preview = if error_output.len() > 500 {
-            &error_output[..500]
-        } else {
-            &error_output
-        };
+        let error_preview = validation::truncate_str(&error_output, 500);
 
         let notes_string = if !failed_diff.is_empty() || !failed_diff_stat.is_empty() {
-            let truncated_diff = if failed_diff.len() > 2000 {
-                &failed_diff[..2000]
-            } else {
-                &failed_diff
-            };
+            let truncated_diff = validation::truncate_str(&failed_diff, 2000);
             format!(
                 "{}\nFAILED_DIFF_STAT:\n{}\nFAILED_DIFF:\n{}",
                 error_preview, failed_diff_stat, truncated_diff
