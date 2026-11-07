@@ -45,6 +45,8 @@ const AUTONOMOUS_SIGNS: &[&str] = &[
     "WRITABLE WORKSPACE REQUIRED: If the workspace is read-only, stop immediately and report blocked instead of attempting implementation.",
     "LOCAL CHECKS ONLY: Run project-native checks if helpful, but do NOT run `dial validate`, `dial learn`, or any git commit/staging commands. The parent DIAL process will handle validation, learning capture, and commits after you exit.",
     "NO STARTUP COMMANDS: Do NOT run `session-context` or other startup-only environment helpers. DIAL already prepared the task context for you.",
+    "FOCUSED FEEDBACK: During debugging, run the smallest relevant test or test-name filter supported by the project harness. Do not rerun the entire browser/integration suite after every local edit. Before reporting completion, run every full acceptance check required by the canonical task/spec on the final code; focused passes are not full-suite evidence.",
+    "BOUND EXPLORATION: Search symbols and read relevant file ranges first. Reuse facts already in context; do not repeatedly dump whole files, generated assets, or unrelated specifications. Keep test output concise, but preserve exit status (use pipefail or an explicit status when piping) and retain failure diagnostics.",
     "FAIL FAST: If blocked or confused, stop and ask rather than guessing.",
 ];
 

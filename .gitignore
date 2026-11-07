@@ -5,3 +5,6 @@
 test-projects/
 target/
 dial/target/
+
+# Python batch coordinator test/import cache
+__pycache__/

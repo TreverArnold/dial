@@ -1,0 +1,19 @@
+# Worker efficiency findings (2026-11-06)
+
+Read-only inspection of two local Bible Study run logs found repeated full browser-suite execution to be a substantial avoidable debugging cost. Task 06 had nine smoke command calls lasting 104–128 seconds each (about 17 minutes in those calls alone), plus a 115-second combined gate; total shell-tool durations were about 1,184 seconds in a 2,396-second event span before a 2,406-second timeout. Shorter smoke calls also occurred. The calls included filtering output, which does not filter the tests executed and may mask command failures without pipefail.
+
+Task 07 completed in 1,342 seconds. Its worker event span was 1,198 seconds, with about 290 seconds summed tool duration: smoke 122 seconds, combined verification 139 seconds, and other checks/inspection. The parent then repeated its configured validation. The roughly 908-second difference between event span and tool durations includes inference, provider waiting and other gaps; it is not a measured provider-only latency. Concurrent tool durations may overlap. No provider billing claims are inferred from reported token totals/cache fields.
+
+Tool responses returned roughly 438,000 characters for Task 06 and 382,000 for Task 07. Repeated large reads increase subsequent context processing, but these measurements do not establish an exact cost saving. The autonomous prompt now recommends focused debugging tests, bounded symbol/range reads and preserving exit status when filtering output. It explicitly retains every canonical full acceptance gate before completion. It does not alter models, retry ceilings, validation configuration or active sessions.
+
+The application smoke harness previously discarded CLI arguments, so adding `--grep` to its npm command could not shorten the suite. The accompanying application change provides a validated `--grep <pattern>` debugging selector, clearly labels focused runs and leaves no-argument/full verification unchanged. An isolated application branch is used while Task 08 owns the live checkout. The fork prompt is generic and must not assume that every project's harness supports filtering.
+
+The expected saving is avoiding unrelated tests on each debugging cycle, not omitting final checks. Measure the focused and full commands on the same revision before quoting a speedup. Remaining duplicated acceptance runs are retained: safely reusing their results would require revision-bound evidence and a separate project verification policy change.
+
+## Measured implementation results
+
+On the same isolated application checkout (Task 07 base `82c4910`), with warm API build caches, the focused Bible-link regression passed in **13.31 seconds** versus **130.39 seconds** for all **17 browser tests**. Both exited zero. That is **117.08 seconds / about 90% less test time** per comparable debugging cycle, not a 90% reduction in end-to-end task time. The cold focused run took 44.31 seconds including a 30.60-second API build. A deliberately unmatched filter exited 1, and all 189 frontend unit tests passed. This is one local benchmark with other host activity, not a guaranteed future speedup.
+
+Application implementation and canonical evidence are committed locally as `db2c502` on `tooling/focused-smoke`. They await integration after the active Task 08 work is reviewed; no application push or worker dispatch was performed. The test-only read-only resource symlink was removed. The required full integrated gate remains outstanding until that merge.
+
+For the fork, `cargo test -p dial-core --lib iteration::context::tests --locked -- --test-threads=1` passed all 17 context tests; formatting/diff checks and release build passed. The rebuilt executable was installed atomically with its predecessor retained. New prompts receive the guidance; an already-running worker is unaffected. The batch coordinator's six synthetic tests also passed before its publication.
