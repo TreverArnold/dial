@@ -317,16 +317,33 @@ fn run_subagent(
     let mut child = command
         .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
-        .stderr(if ai_cli == AiCli::OpenCode {
-            Stdio::inherit()
-        } else {
-            Stdio::piped()
-        })
+        // Never share Dial's output file description with a runtime that may
+        // set O_NONBLOCK on stderr (batch launchers merge stdout and stderr).
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             DialError::CommandFailed(format!("Failed to spawn {}: {}", ai_cli.name(), e))
         })?;
 
+    let stderr = child.stderr.take().unwrap();
+    // Drain independently so verbose runtime diagnostics cannot block a worker.
+    // Keep a bounded tail outside model output/signal parsing.
+    let stderr_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tail = stderr_tail.clone();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut reader = stderr;
+        let mut buffer = [0u8; 4096];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            let mut bytes = tail.lock().unwrap();
+            bytes.extend_from_slice(&buffer[..count]);
+            let excess = bytes.len().saturating_sub(16384);
+            bytes.drain(..excess);
+        }
+    });
     let stdout = child.stdout.take().unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(64);
     std::thread::spawn(move || {
@@ -433,6 +450,9 @@ fn run_subagent(
             println!("{}", red(&format!("  └─ Process error: {}", e)));
         }
     }
+
+    let stderr_path = get_dial_dir().join("worker-stderr.log");
+    let _ = fs::write(&stderr_path, &*stderr_tail.lock().unwrap());
 
     if ai_cli == AiCli::OpenCode && !matches!(status, Ok(s) if s.success()) {
         return Err(DialError::CommandFailed(

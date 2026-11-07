@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 
 
 class Blocked(RuntimeError):
@@ -186,6 +187,7 @@ def lane_environment(work, task):
 
 CHILDREN = set()
 CHILD_LOCK = threading.Lock()
+START_LOCK = threading.Lock()
 STOP = threading.Event()
 
 
@@ -203,19 +205,33 @@ def execute_lane(lane, binary):
     with (work / '.dial/batch-attempt.log').open('wb') as log:
         if STOP.is_set():
             return 130
-        child = subprocess.Popen(['timeout', '--signal=TERM', '--kill-after=15s', '45m',
-                                  binary, 'auto-run', '--cli', 'opencode', '--max', '1',
-                                  '--max-attempts', '1'], cwd=work,
-                                 env=lane_environment(work, lane['task']),
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-        with CHILD_LOCK:
-            CHILDREN.add(child)
-            if STOP.is_set() and child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
+        # Serialize only cold server startup; implementation remains concurrent.
+        # OpenCode shares host-level initialization state even across worktrees.
+        with START_LOCK:
+            child = subprocess.Popen(['timeout', '--signal=TERM', '--kill-after=15s', '45m',
+                                      binary, 'auto-run', '--cli', 'opencode', '--max', '1',
+                                      '--max-attempts', '1'], cwd=work,
+                                     env=lane_environment(work, lane['task']),
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            with CHILD_LOCK:
+                CHILDREN.add(child)
+                if STOP.is_set() and child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+            with read_db(work / '.dial' / ((work / '.dial/current_phase').read_text().strip() + '.db')) as conn:
+                live = dict(conn.execute('SELECT key,value FROM config')).get('opencode_live') == 'true'
+            if live:
+                deadline = time.monotonic() + 30
+                while child.poll() is None and time.monotonic() < deadline and not STOP.is_set():
+                    try:
+                        with socket.create_connection(('127.0.0.1', lane['port']), timeout=0.2):
+                            break
+                    except OSError:
+                        time.sleep(0.1)
         written = 0
-        for chunk in iter(lambda: child.stdout.read(65536), b''):
+        for chunk in iter(lambda: child.stdout.read1(65536), b''):
             keep = chunk[:max(0, 8 * 1024 * 1024 - written)]
             log.write(keep)
+            log.flush()
             written += len(keep)
         child.stdout.close()
         result = child.wait()

@@ -43,10 +43,12 @@ class BatchTests(unittest.TestCase):
         self.bin.mkdir()
         worker = self.bin / 'opencode'
         worker.write_text('''#!/usr/bin/env python3
-import json, os, time
+import json, os, time, fcntl
 from pathlib import Path
 Path('result.txt').write_text(json.dumps({'db': os.environ['BIBLE_STUDY_DB'], 'tmp': os.environ['TMPDIR'], 'start': time.time()}))
 time.sleep(0.4)
+fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
+print('x' * 200000)
 print('DIAL_COMPLETE: synthetic change')
 ''')
         worker.chmod(0o755)

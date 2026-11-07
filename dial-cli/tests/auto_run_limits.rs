@@ -543,3 +543,35 @@ fn pinned_dependency_and_dry_run_use_the_same_selection() {
     assert!(!f.dir.path().join("calls").exists());
     f.cmd().args(["auto-run", "--dry-run"]).assert().failure();
 }
+
+#[test]
+fn worker_nonblocking_stderr_cannot_corrupt_parent_stdout() {
+    let f = Fixture::new("complete");
+    let worker = f.dir.path().join("bin/opencode");
+    fs::write(
+        &worker,
+        r#"#!/usr/bin/env python3
+import fcntl, os
+fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
+print('x' * 200000)
+print('DIAL_COMPLETE: isolated output')
+"#,
+    )
+    .unwrap();
+    f.cmd()
+        .args([
+            "auto-run",
+            "--cli",
+            "opencode",
+            "--max",
+            "1",
+            "--max-attempts",
+            "1",
+        ])
+        .assert()
+        .success();
+    f.cmd()
+        .args(["task", "show", "1"])
+        .assert()
+        .stdout(predicates::str::contains("Status: completed"));
+}

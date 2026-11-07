@@ -89,6 +89,8 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
             "Port {port} already has an OpenCode server; choose another opencode_live_port"
         )));
     }
+    let log_path = crate::db::get_dial_dir().join("opencode-server.log");
+    let log = std::fs::File::create(&log_path)?;
     let mut server = Command::new("opencode")
         .args([
             "serve",
@@ -97,8 +99,8 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
             "--port",
             &port.to_string(),
         ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
         .spawn()
         .map_err(|e| DialError::CommandFailed(format!("Could not start OpenCode server: {e}")))?;
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -108,9 +110,10 @@ pub(super) fn start(port: u16, title: &str) -> Result<LiveSession> {
         }
         if server.try_wait().ok().flatten().is_some() {
             let _ = server.wait();
-            return Err(DialError::CommandFailed(
-                "OpenCode server exited during startup".into(),
-            ));
+            return Err(DialError::CommandFailed(format!(
+                "OpenCode server exited during startup; inspect {}",
+                log_path.display()
+            )));
         }
         std::thread::sleep(Duration::from_millis(250));
     }
