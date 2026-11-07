@@ -240,7 +240,9 @@ def execute_lane(lane, binary):
         return result
 
 
-def start(manifest_path):
+def start(manifest_path, jobs=3):
+    if jobs not in (1, 2, 3):
+        raise Blocked("Worker concurrency must be between 1 and 3")
     manifest = json.loads(manifest_path.read_text())
     source = Path(manifest['source'])
     with locks(source, manifest['source_locks']):
@@ -277,9 +279,10 @@ def start(manifest_path):
                 raise Blocked(f'Install lane frontend dependencies first: {work}')
         STOP.clear()
         previous_handlers = {sig: signal.signal(sig, stop_children) for sig in [signal.SIGINT, signal.SIGTERM]}
+        manifest['concurrency'] = jobs
         manifest['state'] = 'running'
         save(manifest_path, manifest)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             futures = {pool.submit(execute_lane, lane, manifest['binary']): lane for lane in manifest['lanes']}
             for future in concurrent.futures.as_completed(futures):
                 lane = futures[future]
@@ -322,6 +325,9 @@ def main():
     for name in ['start', 'status', 'release']:
         p = sub.add_parser(name)
         p.add_argument('manifest', type=Path)
+        if name == 'start':
+            p.add_argument('--jobs', type=int, choices=(1, 2, 3), default=3,
+                           help='Maximum simultaneous workers (1 runs lanes sequentially)')
         if name == 'release':
             p.add_argument('--reviewed', action='store_true', required=True)
     args = parser.parse_args()
@@ -329,7 +335,7 @@ def main():
         if args.command == 'prepare':
             print(prepare(args.source.resolve(), json.loads(args.plan.read_text()), args.destination.resolve(), args.binary.resolve()))
         elif args.command == 'start':
-            result = start(args.manifest.resolve())
+            result = start(args.manifest.resolve(), jobs=args.jobs)
             print(json.dumps(result, indent=2))
             return 1 if any(lane['state'] == 'failed' for lane in result['lanes']) else 0
         elif args.command == 'status':

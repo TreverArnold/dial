@@ -165,6 +165,26 @@ print('DIAL_COMPLETE: synthetic change')
         self.assertEqual(result['state'], 'awaiting_review')
         self.assertEqual((work / 'app.txt').read_text(), 'unfinished reviewed work')
 
+    def test_sequential_mode_finishes_each_lane_before_starting_next(self):
+        import time
+        import threading
+        manifest = self.prepare()
+        events = []
+        lock = threading.Lock()
+        def execute(lane, binary):
+            with lock:
+                events.append(('start', lane['task']))
+            time.sleep(0.03)
+            with lock:
+                events.append(('end', lane['task']))
+            return 0
+        with patch.object(batch, 'execute_lane', side_effect=execute):
+            result = batch.start(manifest, jobs=1)
+        self.assertEqual(events, [(kind, task) for task in (1, 2, 3)
+                                  for kind in ('start', 'end')])
+        self.assertEqual(result['concurrency'], 1)
+        self.assertEqual(result['state'], 'awaiting_review')
+
     def test_one_failed_lane_is_not_retried_or_accepted(self):
         manifest = self.prepare()
         with patch.object(batch, 'execute_lane', side_effect=lambda lane, binary: 1 if lane['task']==2 else 0) as execute:
