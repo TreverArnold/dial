@@ -257,8 +257,11 @@ def start(manifest_path):
         # All lanes pass preflight before any worker starts.
         for lane in manifest['lanes']:
             work = Path(lane['path'])
-            if git(work, 'rev-parse', 'HEAD') != base or git(work, 'status', '--porcelain', '--untracked-files=all'):
+            lane_base = lane.get('reviewed_checkpoint', base)
+            if git(work, 'rev-parse', 'HEAD') != lane_base or git(work, 'status', '--porcelain', '--untracked-files=all'):
                 raise Blocked('A lane has changed since preparation')
+            if lane_base != base:
+                git(work, 'merge-base', '--is-ancestor', base, lane_base)
             if (work / '.dial/signal.json').exists():
                 raise Blocked('A lane contains a previous worker signal')
             with read_db(work / '.dial' / (manifest['phase'] + '.db')) as conn:

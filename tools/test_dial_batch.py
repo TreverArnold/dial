@@ -148,6 +148,23 @@ print('DIAL_COMPLETE: synthetic change')
         for lane in data['lanes']:
             self.assertFalse((Path(lane['path']) / 'result.txt').exists())
 
+    def test_reviewed_checkpoint_can_resume_without_discarding_partial_work(self):
+        manifest = self.prepare()
+        data = json.loads(manifest.read_text())
+        lane = data['lanes'][0]
+        work = Path(lane['path'])
+        (work / 'app.txt').write_text('unfinished reviewed work')
+        batch.git(work, 'add', 'app.txt')
+        batch.git(work, 'commit', '-m', 'Preserve unfinished work')
+        with self.assertRaisesRegex(batch.Blocked, 'lane has changed'):
+            batch.start(manifest)
+        lane['reviewed_checkpoint'] = batch.git(work, 'rev-parse', 'HEAD')
+        batch.save(manifest, data)
+        with patch.object(batch, 'execute_lane', return_value=0):
+            result = batch.start(manifest)
+        self.assertEqual(result['state'], 'awaiting_review')
+        self.assertEqual((work / 'app.txt').read_text(), 'unfinished reviewed work')
+
     def test_one_failed_lane_is_not_retried_or_accepted(self):
         manifest = self.prepare()
         with patch.object(batch, 'execute_lane', side_effect=lambda lane, binary: 1 if lane['task']==2 else 0) as execute:
