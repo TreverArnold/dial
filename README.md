@@ -23,6 +23,10 @@ When you use AI coding assistants (Claude Code, Codex, Gemini, GitHub Copilot, C
 
 DIAL solves these by externalizing memory to SQLite, linking tasks to specifications, detecting failure patterns automatically, building a trust-scored solution database, and enforcing one-task-at-a-time discipline.
 
+## Isolated batches
+
+For explicitly assigned independent tasks, use the [isolated batch coordinator](docs/isolated-batches.md). It prepares separate worktrees and task-pinned queues, runs at most three bounded workers after an explicit start, and leaves integration and acceptance for review.
+
 ## Architecture
 
 DIAL is structured as a Rust workspace with three crates:

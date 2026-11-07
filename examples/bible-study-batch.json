@@ -1,0 +1,10 @@
+{
+  "name": "buglist-first-batch",
+  "phase": "buglist",
+  "source_locks": ["buglist-run.lock", "installer-run.lock"],
+  "lanes": [
+    {"task": 10, "port": 4101},
+    {"task": 19, "port": 4102},
+    {"task": 21, "port": 4103}
+  ]
+}

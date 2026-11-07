@@ -105,20 +105,9 @@ pub fn iterate_once() -> Result<(bool, String)> {
     let conn = get_db(None)?;
 
     // Get next task (dependency-aware: skip tasks with unsatisfied deps)
-    let mut stmt = conn.prepare(
-        "SELECT id, description, status, priority, blocked_by, spec_section_id, created_at, started_at, completed_at,
-                prd_section_id, total_attempts, total_failures, last_failure_at,
-                acceptance_criteria_json, requires_browser_verification
-         FROM tasks WHERE status = 'pending'
-         AND id NOT IN (
-             SELECT td.task_id FROM task_dependencies td
-             INNER JOIN tasks dep ON dep.id = td.depends_on_id
-             WHERE dep.status != 'completed'
-         )
-         ORDER BY priority, id LIMIT 1",
-    )?;
+    let next_task = crate::task::select_next_task(&conn)?;
 
-    let task = stmt.query_row([], |row| Task::from_row(row)).ok();
+    let task = next_task;
 
     let task = match task {
         Some(t) => t,
@@ -832,20 +821,9 @@ pub fn show_context() -> Result<()> {
     let task = match task {
         Some(t) => t,
         None => {
-            let mut stmt = conn.prepare(
-                "SELECT id, description, status, priority, blocked_by, spec_section_id, created_at, started_at, completed_at,
-                        prd_section_id, total_attempts, total_failures, last_failure_at,
-                        acceptance_criteria_json, requires_browser_verification
-                 FROM tasks WHERE status = 'pending'
-                 AND id NOT IN (
-                     SELECT td.task_id FROM task_dependencies td
-                     INNER JOIN tasks dep ON dep.id = td.depends_on_id
-                     WHERE dep.status != 'completed'
-                 )
-                 ORDER BY priority, id LIMIT 1",
-            )?;
+            let next_task = crate::task::select_next_task(&conn)?;
 
-            match stmt.query_row([], |row| Task::from_row(row)).ok() {
+            match next_task {
                 Some(t) => t,
                 None => {
                     println!("{}", dim("No pending tasks. Task queue empty."));
@@ -882,20 +860,9 @@ pub fn orchestrate() -> Result<()> {
     let conn = get_db(None)?;
 
     // Get next pending task (dependency-aware)
-    let mut stmt = conn.prepare(
-        "SELECT id, description, status, priority, blocked_by, spec_section_id, created_at, started_at, completed_at,
-                prd_section_id, total_attempts, total_failures, last_failure_at,
-                acceptance_criteria_json, requires_browser_verification
-         FROM tasks WHERE status = 'pending'
-         AND id NOT IN (
-             SELECT td.task_id FROM task_dependencies td
-             INNER JOIN tasks dep ON dep.id = td.depends_on_id
-             WHERE dep.status != 'completed'
-         )
-         ORDER BY priority, id LIMIT 1",
-    )?;
+    let next_task = crate::task::select_next_task(&conn)?;
 
-    let task = match stmt.query_row([], |row| Task::from_row(row)).ok() {
+    let task = match next_task {
         Some(t) => t,
         None => {
             println!("{}", green("All tasks completed! Nothing to orchestrate."));

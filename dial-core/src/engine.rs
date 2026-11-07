@@ -476,20 +476,9 @@ impl Engine {
         let conn = self.conn()?;
 
         // Get next pending task (same query as iterate_once / auto_run)
-        let mut stmt = conn.prepare(
-            "SELECT id, description, status, priority, blocked_by, spec_section_id, created_at, started_at, completed_at,
-                    prd_section_id, total_attempts, total_failures, last_failure_at,
-                    acceptance_criteria_json, requires_browser_verification
-             FROM tasks WHERE status = 'pending'
-             AND id NOT IN (
-                 SELECT td.task_id FROM task_dependencies td
-                 INNER JOIN tasks dep ON dep.id = td.depends_on_id
-                 WHERE dep.status != 'completed'
-             )
-             ORDER BY priority, id LIMIT 1",
-        )?;
+        let next_task = crate::task::select_next_task(&conn)?;
 
-        let task: Option<Task> = stmt.query_row([], |row| Task::from_row(row)).ok();
+        let task: Option<Task> = next_task;
 
         let task = match task {
             Some(t) => t,

@@ -465,3 +465,81 @@ fn task_attempt_override_stops_at_its_ceiling() {
         .stdout(predicates::str::contains("Status: blocked"))
         .stdout(predicates::str::contains("Failures: 4"));
 }
+
+#[test]
+fn pinned_worker_never_runs_another_task() {
+    let f = Fixture::new("complete");
+    f.cmd()
+        .args(["config", "set", "execution_task_id", "2"])
+        .assert()
+        .success();
+    f.cmd()
+        .args([
+            "auto-run",
+            "--cli",
+            "opencode",
+            "--max",
+            "2",
+            "--max-attempts",
+            "2",
+        ])
+        .assert()
+        .success();
+    assert_eq!(f.calls(), 1);
+    f.cmd()
+        .args(["task", "show", "1"])
+        .assert()
+        .stdout(predicates::str::contains("Status: pending"));
+    f.cmd()
+        .args(["task", "show", "2"])
+        .assert()
+        .stdout(predicates::str::contains("Status: completed"));
+}
+
+#[test]
+fn invalid_pin_fails_closed() {
+    let f = Fixture::new("complete");
+    for value in ["", "0", "-1", "oops", "9999"] {
+        f.cmd()
+            .args(["config", "set", "execution_task_id", "--", value])
+            .assert()
+            .success();
+        f.cmd().args(["task", "next"]).assert().failure();
+    }
+    assert!(!f.dir.path().join("calls").exists());
+}
+
+#[test]
+fn source_reservation_prevents_sequential_dispatch() {
+    let f = Fixture::new("complete");
+    fs::write(f.dir.path().join(".dial/batch-reservation.json"), "{}").unwrap();
+    f.cmd()
+        .args(["auto-run", "--cli", "opencode", "--max-attempts", "1"])
+        .assert()
+        .failure();
+    assert!(!f.dir.path().join("calls").exists());
+}
+
+#[test]
+fn pinned_dependency_and_dry_run_use_the_same_selection() {
+    let f = Fixture::new("complete");
+    f.cmd()
+        .args(["config", "set", "execution_task_id", "2"])
+        .assert()
+        .success();
+    f.cmd()
+        .args(["auto-run", "--dry-run", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("second synthetic task"));
+    f.cmd()
+        .args(["task", "depend", "2", "1"])
+        .assert()
+        .success();
+    f.cmd()
+        .args(["auto-run", "--cli", "opencode", "--max-attempts", "1"])
+        .assert()
+        .success();
+    assert!(!f.dir.path().join("calls").exists());
+    f.cmd().args(["auto-run", "--dry-run"]).assert().failure();
+}

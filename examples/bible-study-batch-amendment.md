@@ -1,0 +1,13 @@
+## Approved isolated batch preparation (2026-11-06)
+
+The owner approved preparing the Dial fork for three isolated DeepSeek workers, with execution to be started later. This authorizes orchestration implementation and synthetic testing, not application worker dispatch. A possible additional direct implementation run by the supervising assistant remains unassigned; do not start it implicitly.
+
+The first proposed batch is Tasks 10, 19 and 21, after the active Task 08 attempt has finished and its work has been reviewed. Recheck the actual queue before preparing lanes. Tasks 10 → 11 → 12 stay sequential; Tasks 14 → 15 stay sequential; Task 26 remains the final combined/native gate. Each lane executes one pinned task in its own Git worktree, with independent Dial snapshot, signals, live-view port, temporary data, build outputs and test database. Shared immutable resources remain read-only. Do not materialize the tracked root UserDB.sqlite in worker checkouts.
+
+The bug-list model remains `tokenharbor-2/deepseek-v4.1-flash:free`; installer configuration and history are unchanged. The fork's `tools/dial_batch.py` prepares and starts batches separately. Preparation checks the source's bug-list and installer launcher locks, dirty/active state, task readiness and live-view ports. The existing sequential launcher must use the updated batch-capable `dial-fork` binary, which refuses selection while the source has a batch reservation.
+
+No task is marked complete in the source queue by preparation or worker exit. Review actual checks, implementation diff and scope; integrate accepted commits serially, verify the combined revision, and record durable evidence here before reconciling source task status. Retain failed attempts and counters. Do not import worker queues wholesale. Release the source reservation only after reviewing every lane. Additional tasks are assigned from the integrated base in later batches. No unattended merge/push or worker retry is authorized by preparation.
+
+Existing verification requirements remain in force. This first batch implementation does not yet deduplicate worker checks and Dial's validation gate. Any later deduplication must preserve all required checks and tie results to the exact revision; it must not become a skipped gate.
+
+The fork documentation `docs/isolated-batches.md` describes the prepare/start/status/release commands and review procedure; its `examples/bible-study-batch.json` specifies the initial task IDs and ports. Apply this amendment to the canonical bug-list spec under both launcher locks after active work is reviewed and before preparing application lanes. Do not append it while another worker could capture it in an automatic commit.

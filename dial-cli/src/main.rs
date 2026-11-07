@@ -70,6 +70,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Report support for isolated, explicitly assigned worker batches
+    BatchCapabilities,
     /// Initialize DIAL in current directory
     Init {
         /// Phase name
@@ -627,6 +629,10 @@ async fn main() {
 }
 
 async fn run_command(command: Commands) -> anyhow::Result<()> {
+    if matches!(command, Commands::BatchCapabilities) {
+        println!("task-pin-v1 source-reservation-v1");
+        return Ok(());
+    }
     // Init creates a new engine — handled separately
     if let Commands::Init {
         phase,
@@ -1422,6 +1428,7 @@ async fn run_command(command: Commands) -> anyhow::Result<()> {
             engine.orchestrate().await?;
         }
 
+        Commands::BatchCapabilities => unreachable!(),
         Commands::AutoRun {
             max,
             max_attempts,

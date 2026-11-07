@@ -170,12 +170,55 @@ pub fn task_list(show_all: bool) -> Result<()> {
 
 pub fn task_next() -> Result<Option<Task>> {
     let conn = get_db(None)?;
+    let task = select_next_task(&conn)?;
+    print_next_task(&task);
+    Ok(task)
+}
+
+pub(crate) fn select_next_task(conn: &Connection) -> Result<Option<Task>> {
+    if get_dial_dir().join("batch-reservation.json").exists() {
+        return Err(DialError::InvalidConfig(
+            "This checkout has a reserved batch; review and release it before sequential execution"
+                .into(),
+        ));
+    }
+
+    use rusqlite::OptionalExtension;
+    let pinned: Option<String> = conn
+        .query_row(
+            "SELECT value FROM config WHERE key = 'execution_task_id'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let pinned = pinned
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|id| *id > 0)
+                .ok_or_else(|| {
+                    DialError::InvalidConfig("execution_task_id must be a positive task ID".into())
+                })
+        })
+        .transpose()?;
+    if let Some(id) = pinned {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(DialError::TaskNotFound(id));
+        }
+    }
 
     let mut stmt = conn.prepare(
         "SELECT id, description, status, priority, blocked_by, spec_section_id, created_at, started_at, completed_at,
                 prd_section_id, total_attempts, total_failures, last_failure_at,
                 acceptance_criteria_json, requires_browser_verification
          FROM tasks WHERE status = 'pending'
+         AND (?1 IS NULL OR id = ?1)
          AND id NOT IN (
              SELECT td.task_id FROM task_dependencies td
              INNER JOIN tasks dep ON dep.id = td.depends_on_id
@@ -184,9 +227,11 @@ pub fn task_next() -> Result<Option<Task>> {
          ORDER BY priority, id LIMIT 1",
     )?;
 
-    let task = stmt.query_row([], |row| Task::from_row(row)).ok();
+    Ok(stmt.query_row([pinned], Task::from_row).optional()?)
+}
 
-    match &task {
+fn print_next_task(task: &Option<Task>) {
+    match task {
         Some(t) => {
             println!("{}", bold("Next task:"));
             println!("  #{}: {}", t.id, t.description);
@@ -210,8 +255,6 @@ pub fn task_next() -> Result<Option<Task>> {
             println!("{}", dim("No pending tasks."));
         }
     }
-
-    Ok(task)
 }
 
 pub fn task_done(task_id: i64) -> Result<()> {
